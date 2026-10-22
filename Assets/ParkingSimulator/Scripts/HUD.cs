@@ -8,6 +8,7 @@ namespace ParkingSim
     {
         public GameManager gm;
         public bool menuOpen = true;
+        public bool mapOpen;
         public bool helpOpen;
         public bool showGuideInfo = true;
         public bool showMirrorsHud = true;
@@ -37,9 +38,15 @@ namespace ParkingSim
             menuOpen = open;
             if (open && gm) startSel = gm.startIndex;
             if (gm) gm.ApplyInputLock();
-            // メニュー表示中はゲームの時間と音を完全に止める
-            Time.timeScale = open ? 0f : 1f;
-            AudioListener.pause = open;
+            ApplyPause();
+        }
+
+        /// <summary>メニューやマップの表示中はゲームの時間と音を完全に止める</summary>
+        public void ApplyPause()
+        {
+            bool paused = menuOpen || mapOpen;
+            Time.timeScale = paused ? 0f : 1f;
+            AudioListener.pause = paused;
         }
 
         void OnDestroy()
@@ -132,10 +139,12 @@ namespace ParkingSim
             DrawTopInfo();
             DrawInstruments();
             if (gm.showSensors) DrawSensors();
-            if (!gm.car.engineOn && !menuOpen && !gm.showResult) DrawEngineOff();
+            if (gm.destination != null) DrawTrip();
+            if (!gm.car.engineOn && !menuOpen && !mapOpen && !gm.showResult) DrawEngineOff();
             DrawToasts();
-            if (gm.showResult && gm.lastResult != null && !menuOpen && !helpOpen) DrawResult();
-            if (helpOpen && !menuOpen) DrawHelp();
+            if (gm.showResult && gm.lastResult != null && !menuOpen && !helpOpen && !mapOpen) DrawResult();
+            if (helpOpen && !menuOpen && !mapOpen) DrawHelp();
+            if (mapOpen && !menuOpen) DrawMap();
             if (menuOpen) DrawMenu();
         }
 
@@ -154,7 +163,7 @@ namespace ParkingSim
             }
             GUILayout.BeginArea(new Rect(16, 16, 620, h), panel);
             GUILayout.Label($"{CarSpec.DisplayName} 駐車シミュレーター", title);
-            GUILayout.Label($"視点: {mode}   <color=#9ad>V/ZR:視点切替  H:操作説明  Esc:設定  F5:スタート地点へ戻る</color>", small);
+            GUILayout.Label($"視点: {mode}   <color=#9ad>V/ZR:視点切替  N/−:マップ  H:操作説明  Esc:設定  F5:最初から</color>", small);
             GUILayout.Label($"現在地: <b>{gm.world.ZoneName(car.Center)}</b>" + (gm.nearSpot != null ? $"   <color=#9df>{gm.nearSpot.name}</color>" : ""), small);
             GUILayout.Label(Pad.Status() + (Pad.Connected ? "" : "   <color=#888>(未接続)</color>"), small);
             if (live != null)
@@ -415,7 +424,7 @@ namespace ParkingSim
 
         void DrawHelp()
         {
-            var r = new Rect(vw / 2 - 420, 60, 840, 660);
+            var r = new Rect(vw / 2 - 420, 50, 840, 720);
             GUILayout.BeginArea(r, solid);
             GUILayout.Label("操作説明", title);
             GUILayout.Label("<color=#fd6><b>キーボード</b></color>", label);
@@ -433,6 +442,7 @@ namespace ParkingSim
                 "3D運転席: <b>右ドラッグ</b> 見回す, <b>Z</b> 左を見る, <b>X</b> 右を見る, <b>Z+X</b> 振り返る, <b>ホイール</b> 視野角",
                 "<b>G</b> 予想進路線   <b>K</b> バックモニター   <b>O</b> センサー音   <b>L</b> 位置ガイド",
                 "<b>Enter</b>  近くの駐車枠で判定(エンジンを止めても自動判定)   <b>F5 / Backspace</b>  スタート地点へ戻る",
+                "<b>N</b>  マップ(目的地を選んでそこに駐車する)",
                 "<b>Esc / F1</b>  設定メニュー   <b>H</b>  この画面を閉じる",
                 "<color=#fd6><b>Joy-Con (L)+(R) / ゲームパッド</b></color>",
                 "<b>左の ▲ / ▼</b>  アクセル / ブレーキ(押している間だけ)",
@@ -441,7 +451,7 @@ namespace ParkingSim
                 "<b>▼ + L 長押し</b>  エンジン始動(シフト P)   <b>▼ + ZL 長押し</b>  エンジン停止(P のとき)",
                 "<b>ZR</b>  視点切替",
                 "<b>左スティック</b>  運転席: 倒している間その方向を見る / 外から: 上下で仰角・左右で回り込み / 2D: ズーム",
-                "<b>キャプチャーボタン(左の丸いボタン)</b>  設定メニュー",
+                "<b>− ボタン</b>  マップ(十字/スティックで目的地を選び A で決定)   <b>キャプチャーボタン</b>  設定メニュー",
                 "<color=#9ad>設定メニューでクリープを ON にすると、D/R に入れてブレーキを離すだけで動き出します。</color>",
                 "<color=#9ad>最小回転半径 5.3m(ハンドルいっぱいで外側前輪がえがく円の半径)を再現しています。</color>",
             };
@@ -452,9 +462,9 @@ namespace ParkingSim
         void DrawResult()
         {
             var res = gm.lastResult;
-            var r = new Rect(vw / 2 - 330, 170, 660, 560);
+            var r = new Rect(vw / 2 - 330, res.trip ? 130 : 170, 660, res.trip ? 660 : 560);
             GUILayout.BeginArea(r, solid);
-            GUILayout.Label($"駐車判定  <size=18>{res.spotName}</size>", title);
+            GUILayout.Label(res.trip ? $"<color=#fb6>目的地に到着!</color>  <size=18>{res.spotName}</size>" : $"駐車判定  <size=18>{res.spotName}</size>", title);
             GUILayout.BeginHorizontal();
             var rankCol = res.rank == "S" ? "#ffd84a" : res.rank == "A" ? "#7df" : res.rank == "B" ? "#9e9" : res.rank == "-" ? "#aaa" : "#f99";
             GUILayout.Label($"<color={rankCol}>{res.rank}</color>", huge, GUILayout.Width(150), GUILayout.Height(100));
@@ -473,15 +483,185 @@ namespace ParkingSim
                                 (s.parallel ? $"縁石まで {res.curbDist * 100:0} cm" : $"通路側 {(res.protrusion > 0 ? $"{res.protrusion * 100:0}cm はみ出し" : $"{-res.protrusion * 100:0}cm 内側")}"), label);
             }
             GUILayout.Label($"接触 {res.collisions} 回   脱輪 {res.curbHits} 回   切り返し {res.switches} 回   時間 {res.time:0.0} 秒", label);
+            if (res.trip)
+            {
+                GUILayout.Label($"道のり {res.tripDistance:0} m   所要時間 {Clock(res.tripTime)}   道中の接触 {res.tripCollisions} 回   脱輪 {res.tripCurbHits} 回", label);
+                GUILayout.Label(res.prevBest < 0 ? "<color=#9df>初めての到着です</color>"
+                              : res.score > res.prevBest ? $"<color=#ffd84a><b>自己ベスト更新!</b></color>(前回まで {res.prevBest} 点)"
+                              : $"自己ベスト {res.prevBest} 点", label);
+            }
             GUILayout.Space(6);
             foreach (var n in res.notes) GUILayout.Label("・" + n, label);
             GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
+            if (res.trip && GUILayout.Button("次の目的地 (−)", GUILayout.Height(44))) gm.OpenMap(true);
             if (GUILayout.Button("続ける (Enter)", GUILayout.Height(44))) gm.showResult = false;
             if (GUILayout.Button("やり直し (F5)", GUILayout.Height(44))) gm.Respawn();
             if (GUILayout.Button("設定 (Esc)", GUILayout.Height(44))) { gm.showResult = false; SetMenu(true); }
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
+        }
+
+        static string Clock(float sec) => $"{(int)(sec / 60)}:{(int)sec % 60:00}";
+
+        // ---------------------------------------------------------------- 目的地ゲーム
+        /// <summary>目的地までの方向・距離(右上)。矢印は車の前を上として目的地の方向を指す</summary>
+        void DrawTrip()
+        {
+            var car = gm.car;
+            var dest = gm.destination;
+            var r = new Rect(vw - 456, 16, 440, 120);
+            GUI.Box(r, GUIContent.none, panel);
+            Vector3 d = dest.center - car.Center;
+            d.y = 0f;
+            float dist = d.magnitude;
+            GUI.Label(new Rect(r.x + 14, r.y + 8, 330, 28), $"<color=#fb6>目的地</color>  <b>{dest.name}</b>", label);
+            GUI.Label(new Rect(r.x + 14, r.y + 40, 330, 26), gm.world.ZoneName(dest.center), small);
+            GUI.Label(new Rect(r.x + 14, r.y + 66, 330, 44), dist < 10f ? "<size=26><b>到着</b></size>  <size=16>停めて P・エンジン停止で判定</size>" : $"<size=30><b>{dist:0}</b></size> m", label);
+
+            Vector2 c = new Vector2(r.xMax - 58, r.y + 60);
+            float rel = Mathf.DeltaAngle(car.yaw, Kit.YawOf(d)) * Mathf.Deg2Rad;
+            Vector2 f = new Vector2(Mathf.Sin(rel), -Mathf.Cos(rel));
+            Vector2 side = new Vector2(-f.y, f.x);
+            Color col = new Color(1f, 0.6f, 0.15f);
+            Vector2 tip = c + f * 38f, tail = c - f * 30f;
+            Line(tail, tip - f * 6f, col, 10f);
+            Line(tip, tip - f * 22f + side * 18f, col, 9f);
+            Line(tip, tip - f * 22f - side * 18f, col, 9f);
+        }
+
+        /// <summary>町のマップ。目的地の候補(空いている区画)を選ぶ</summary>
+        void DrawMap()
+        {
+            var map = gm.map;
+            var car = gm.car;
+            GUI.DrawTexture(new Rect(0, 0, vw, vh), solidTex);
+
+            const float side = 420f, pad = 24f;
+            float aspect = MapView.Area.width / MapView.Area.height;
+            float mh = vh - pad * 2, mw = mh * aspect;
+            float maxW = vw - side - pad * 3;
+            if (mw > maxW) { mw = maxW; mh = mw / aspect; }
+            float left = (vw - (mw + pad + side)) / 2;
+            var mr = new Rect(left, (vh - mh) / 2, mw, mh);
+            GUI.DrawTexture(new Rect(mr.x - 4, mr.y - 4, mr.width + 8, mr.height + 8), frameTex);
+            if (map.texture) GUI.DrawTexture(mr, map.texture);
+
+            // 区域名
+            var zoneStyle = new GUIStyle(small) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+            foreach (var z in gm.world.zones)
+            {
+                if (z.name == "十字路の交差点") continue;
+                // 区画に重ならないよう区域のすぐ下に出す(教習所全体は上端の内側)
+                bool big = z.rect.width * z.rect.height > 5000f;
+                Vector3 p = new Vector3(z.rect.center.x, 0, big ? z.rect.yMax - 4f : z.rect.yMin - 2.5f);
+                Vector2 sp = MapView.ToScreen(p, mr);
+                Shadowed(new Rect(sp.x - 150, sp.y - 14, 300, 28), z.name, zoneStyle);
+            }
+
+            // 目的地の候補(到着したことがある区画は緑)
+            var sel = map.Selected;
+            float blink = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 6f);
+            for (int i = 0; i < map.destinations.Count; i++)
+            {
+                var s = map.destinations[i];
+                bool done = gm.bestScores.ContainsKey(s);
+                Color col = s == sel ? Color.Lerp(new Color(1f, 0.45f, 0.05f), Color.white, blink * 0.5f)
+                          : s == gm.destination ? new Color(1f, 0.45f, 0.05f)
+                          : done ? new Color(0.35f, 0.95f, 0.45f) : new Color(0.2f, 0.85f, 1f);
+                SpotOutline(s, mr, col, s == sel ? 4f : 2.5f);
+            }
+
+            // 自車から選択中の区画への直線
+            if (sel != null)
+            {
+                Vector2 a = MapView.ToScreen(car.Center, mr), b = MapView.ToScreen(sel.center, mr);
+                float len = (b - a).magnitude;
+                for (float t = 0; t < len; t += 16f)
+                    Line(Vector2.Lerp(a, b, t / len), Vector2.Lerp(a, b, Mathf.Min(1f, (t + 8f) / len)), new Color(1f, 0.6f, 0.15f, 0.8f), 3f);
+                Vector2 lp = b + new Vector2(14, -34);
+                var nameSize = label.CalcSize(new GUIContent(sel.name));
+                var nr = new Rect(Mathf.Min(lp.x, mr.xMax - nameSize.x - 20), Mathf.Max(lp.y, mr.y + 4), nameSize.x + 16, 30);
+                GUI.Box(nr, GUIContent.none, solid);
+                GUI.Label(new Rect(nr.x + 8, nr.y + 2, nameSize.x, 26), sel.name, label);
+            }
+
+            // 自車(黄色の車体と前向きの矢印)
+            var c4 = new Vector3[4];
+            CarSpec.Corners(car.Center, car.yaw, c4);
+            Color carCol = new Color(1f, 0.92f, 0.2f);
+            for (int i = 0; i < 4; i++) Line(MapView.ToScreen(c4[i], mr), MapView.ToScreen(c4[(i + 1) % 4], mr), carCol, 4f);
+            Vector2 cc = MapView.ToScreen(car.Center, mr), fwd = MapView.ToScreen(car.Center + CarSpec.Forward(car.yaw) * 6f, mr);
+            Line(cc, fwd, carCol, 4f);
+            Shadowed(new Rect(cc.x - 60, cc.y + 12, 120, 24), "現在地", new GUIStyle(small) { alignment = TextAnchor.MiddleCenter, normal = { textColor = carCol } });
+
+            // マウス: クリックで選択、同じ区画をダブルクリックで決定
+            var e = Event.current;
+            if (e.type == EventType.MouseDown && e.button == 0 && mr.Contains(e.mousePosition))
+            {
+                int hit = map.Hit(e.mousePosition, mr, 30f);
+                if (hit >= 0)
+                {
+                    if (hit == map.cursor && e.clickCount >= 2) gm.ConfirmMap();
+                    else map.cursor = hit;
+                }
+                e.Use();
+            }
+
+            // 右側の説明
+            var pr = new Rect(mr.xMax + pad, mr.y, side, mh);
+            GUILayout.BeginArea(pr, solid);
+            GUILayout.Label("マップ", title);
+            GUILayout.Label("<color=#9ad>目的地を選んで、そこに駐車しよう。停めて P に入れ、エンジンを切ると判定します。</color>", new GUIStyle(small) { wordWrap = true });
+            GUILayout.Space(10);
+            if (sel != null)
+            {
+                GUILayout.Label("選択中", header);
+                GUILayout.Label($"<b>{sel.name}</b>", label);
+                GUILayout.Label(gm.world.ZoneName(sel.center), small);
+                string kind = sel.parallel ? "縦列駐車" : !sel.bothWays ? "車庫入れ(バック)" : "駐車区画(前向き・バックどちらでも)";
+                GUILayout.Label($"{kind}   直線距離 {(sel.center - car.Center).magnitude:0} m", small);
+                GUILayout.Label(gm.bestScores.TryGetValue(sel, out int best) ? $"自己ベスト <b>{best}</b> 点" : "<color=#888>まだ到着していません</color>", small);
+            }
+            GUILayout.Space(8);
+            GUILayout.Label("現在の目的地", header);
+            GUILayout.Label(gm.destination != null ? $"<color=#fb6><b>{gm.destination.name}</b></color>" : "<color=#888>なし(自由に練習)</color>", label);
+            GUILayout.Label($"到着 {gm.arrivals} 回   制覇 {gm.bestScores.Count} / {map.destinations.Count} 区画", small);
+            GUILayout.Space(8);
+            GUILayout.Label("操作", header);
+            foreach (var l in new[]
+            {
+                "<b>十字 / スティック</b>  区画を選ぶ(キー: 矢印)",
+                "<b>A</b>  ここを目的地にする(キー: Enter)",
+                "<b>X</b>  おまかせ(キー: R)",
+                "<b>Y</b>  目的地をやめる(キー: Delete)",
+                "<b>− / B</b>  閉じる(キー: N / Esc)",
+                "<color=#9ad>マウス: クリックで選択、ダブルクリックで決定</color>",
+            }) GUILayout.Label(l, small);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("<b>ここを目的地にする (A)</b>", new GUIStyle(GUI.skin.button) { richText = true, fontSize = 20 }, GUILayout.Height(50))) gm.ConfirmMap();
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("おまかせ (X)", GUILayout.Height(42))) gm.PickRandom();
+            if (GUILayout.Button("やめる (Y)", GUILayout.Height(42))) gm.SetDestination(null);
+            if (GUILayout.Button("閉じる (−)", GUILayout.Height(42))) gm.OpenMap(false);
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
+        }
+
+        void SpotOutline(TargetSpot s, Rect mr, Color col, float w)
+        {
+            float hu = s.width / 2 - s.lineWidth / 2, hw = s.length / 2;
+            Vector2 a = MapView.ToScreen(s.ToWorld(-hu, -hw), mr), b = MapView.ToScreen(s.ToWorld(hu, -hw), mr);
+            Vector2 c = MapView.ToScreen(s.ToWorld(hu, hw), mr), d = MapView.ToScreen(s.ToWorld(-hu, hw), mr);
+            Line(a, b, col, w); Line(b, c, col, w); Line(c, d, col, w); Line(d, a, col, w);
+        }
+
+        /// <summary>影付きの文字(マップの上でも読めるように)</summary>
+        static void Shadowed(Rect r, string text, GUIStyle st)
+        {
+            var sh = new GUIStyle(st) { normal = { textColor = new Color(0, 0, 0, 0.85f) } };
+            GUI.Label(new Rect(r.x + 2, r.y + 2, r.width, r.height), text, sh);
+            GUI.Label(r, text, st);
         }
 
         // ---------------------------------------------------------------- 設定メニュー

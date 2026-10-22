@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -27,6 +28,15 @@ namespace ParkingSim
         [System.NonSerialized] public WorldResult world;
         [System.NonSerialized] public JudgeResult lastResult;
         [System.NonSerialized] public bool showResult;
+
+        // 目的地ゲーム
+        [System.NonSerialized] public MapView map;
+        [System.NonSerialized] public TargetSpot destination; // マップで選んだ目的地(null=自由に練習)
+        [System.NonSerialized] public int arrivals;           // 目的地に駐車できた回数
+        public readonly Dictionary<TargetSpot, int> bestScores = new Dictionary<TargetSpot, int>();
+        DestinationMarker marker;
+        ParkingJudge.Baseline tripBase, destBase; // 目的地を決めた時点 / 目的地に近づいた時点の記録
+        float tripStartDistance;
 
         /// <summary>近くの駐車枠(位置ガイドと判定に使う)</summary>
         [System.NonSerialized] public TargetSpot nearSpot;
@@ -112,6 +122,10 @@ namespace ParkingSim
             path = Util.Child("Path Guide", root.transform, Vector3.zero).AddComponent<PathGuide>();
             path.Init(car);
 
+            map = new MapView(transform, world);
+            marker = Util.Child("Destination Marker", root.transform, Vector3.zero).AddComponent<DestinationMarker>();
+            marker.Init(car);
+
             Physics.SyncTransforms();
             rig.Attach(car);
             Respawn();
@@ -128,8 +142,96 @@ namespace ParkingSim
             lastResult = null;
             nearSpot = null;
             baseline = ParkingJudge.Baseline.Of(car);
+            // 目的地はそのままで、スタート地点から数え直す
+            tripBase = destBase = baseline;
+            tripStartDistance = car.travelled;
             rig.Snap();
             ApplyInputLock();
+        }
+
+        void OnDestroy()
+        {
+            map?.Release();
+        }
+
+        // ---------------------------------------------------------------- 目的地ゲーム
+        public void SetDestination(TargetSpot s)
+        {
+            destination = s;
+            marker.Show(s);
+            tripBase = destBase = ParkingJudge.Baseline.Of(car);
+            tripStartDistance = car.travelled;
+            if (s != null && hud) hud.Toast($"目的地: {s.name}", new Color(1f, 0.7f, 0.3f), 3f);
+        }
+
+        public void OpenMap(bool open)
+        {
+            if (!hud || map == null) return;
+            hud.mapOpen = open;
+            if (open)
+            {
+                showResult = false;
+                map.Render();
+                int i = destination != null ? map.destinations.IndexOf(destination) : -1;
+                if (i >= 0) map.cursor = i;
+                else map.SelectNearest(car.Center);
+            }
+            hud.ApplyPause();
+            ApplyInputLock();
+        }
+
+        public void ConfirmMap()
+        {
+            if (map.Selected == null) return;
+            SetDestination(map.Selected);
+            OpenMap(false);
+        }
+
+        /// <summary>今いる場所から 30m 以上離れた候補からランダムに選ぶ</summary>
+        public void PickRandom()
+        {
+            var far = new List<int>();
+            for (int i = 0; i < map.destinations.Count; i++)
+                if ((map.destinations[i].center - car.Center).sqrMagnitude > 30f * 30f && map.destinations[i] != destination) far.Add(i);
+            if (far.Count > 0) map.cursor = far[Random.Range(0, far.Count)];
+        }
+
+        void MapInput()
+        {
+            Vector2 dir = Pad.LeftStick + Pad.RightStick;
+            if (Pad.Held(JoyButton.Up) || Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W)) dir.y += 1f;
+            if (Pad.Held(JoyButton.Down) || Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S)) dir.y -= 1f;
+            if (Pad.Held(JoyButton.Right) || Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D)) dir.x += 1f;
+            if (Pad.Held(JoyButton.Left) || Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A)) dir.x -= 1f;
+            map.Steer(dir);
+            if (Pad.Down(JoyButton.A) || Pad.Down(JoyButton.LStick) || Input.GetKeyDown(KeyCode.Return) ||
+                Input.GetKeyDown(KeyCode.KeypadEnter) || Input.GetKeyDown(KeyCode.Space))
+                ConfirmMap();
+            else if (Pad.Down(JoyButton.X) || Input.GetKeyDown(KeyCode.R)) PickRandom();
+            else if (Pad.Down(JoyButton.Y) || Input.GetKeyDown(KeyCode.Delete))
+            {
+                if (destination != null) hud.Toast("目的地を取り消しました", Color.white);
+                SetDestination(null);
+            }
+            else if (Pad.Down(JoyButton.B)) OpenMap(false);
+        }
+
+        /// <summary>目的地に停めてエンジンを切った(または Enter で判定した)</summary>
+        void FinishTrip()
+        {
+            var r = ParkingJudge.Evaluate(destination, car, destBase);
+            r.trip = true;
+            r.tripTime = car.driveTime - tripBase.time;
+            r.tripDistance = car.travelled - tripStartDistance;
+            r.tripCollisions = car.collisions - tripBase.collisions;
+            r.tripCurbHits = car.curbHits - tripBase.curbHits;
+            r.prevBest = bestScores.TryGetValue(destination, out int best) ? best : -1;
+            if (r.score > r.prevBest) bestScores[destination] = r.score;
+            arrivals++;
+            lastResult = r;
+            showResult = true;
+            destination = null;
+            marker.Show(null);
         }
 
         void OnEngineChanged(bool on)
@@ -144,6 +246,11 @@ namespace ParkingSim
 
         public void Judge(bool auto)
         {
+            if (destination != null && ParkingJudge.Measure(destination, car).nearTarget)
+            {
+                FinishTrip();
+                return;
+            }
             if (nearSpot == null)
             {
                 if (!auto && hud) hud.Toast("近くに駐車枠がありません", Color.white);
@@ -151,13 +258,17 @@ namespace ParkingSim
             }
             var r = ParkingJudge.Evaluate(nearSpot, car, baseline);
             if (auto && !r.nearTarget) return;
+            if (destination != null && r.nearTarget) r.notes.Insert(0, $"ここは目的地({destination.name})ではありません");
             lastResult = r;
             showResult = true;
         }
 
         void UpdateNearSpot()
         {
-            var s = world.NearestSpot(car.Center, NearRange);
+            // 目的地の近くでは目的地を優先する(位置ガイドも目的地に対して出す)
+            bool nearDest = destination != null && (destination.center - car.Center).sqrMagnitude < NearRange * NearRange;
+            var s = nearDest ? destination : world.NearestSpot(car.Center, NearRange);
+            if (destination != null && !nearDest) destBase = ParkingJudge.Baseline.Of(car);
             // 区画から離れている間は記録の起点を更新し続ける(近づいてからの接触・切り返しだけを数える)
             if (s == null) baseline = ParkingJudge.Baseline.Of(car);
             else if (s != nearSpot && nearSpot == null) baseline = ParkingJudge.Baseline.Of(car);
@@ -169,13 +280,20 @@ namespace ParkingSim
             if (!car) return;
             UpdateNearSpot();
             bool menu = hud && hud.menuOpen;
-            // Esc / F1 / Joy-Con(L) のキャプチャーボタン: 設定メニュー
+            bool mapOpen = hud && hud.mapOpen;
+            // Esc / F1 / Joy-Con(L) のキャプチャーボタン: 設定メニュー(マップが開いていればマップを閉じる)
             if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.F1) || Pad.Down(JoyButton.Capture))
             {
-                if (showResult && !menu) showResult = false;
+                if (mapOpen) OpenMap(false);
+                else if (showResult && !menu) showResult = false;
                 else hud.SetMenu(!menu);
             }
-            if (!menu)
+            // N / Joy-Con(L) の − ボタン: マップ
+            else if (!menu && (Input.GetKeyDown(KeyCode.N) || Pad.Down(JoyButton.Minus))) OpenMap(!mapOpen);
+            else if (mapOpen && !menu) MapInput();
+            menu = hud && hud.menuOpen;
+            mapOpen = hud && hud.mapOpen;
+            if (!menu && !mapOpen)
             {
                 if (Input.GetKeyDown(KeyCode.F5) || Input.GetKeyDown(KeyCode.Backspace)) Respawn();
                 if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
@@ -199,7 +317,7 @@ namespace ParkingSim
 
         public void ApplyInputLock()
         {
-            bool locked = hud && hud.menuOpen;
+            bool locked = hud && (hud.menuOpen || hud.mapOpen);
             if (car) car.inputEnabled = !locked;
             if (rig) rig.inputEnabled = !locked;
         }
@@ -258,6 +376,31 @@ namespace ParkingSim
             ScreenCapture.CaptureScreenshot(Path("home_judge.png"));
             yield return new WaitForSecondsRealtime(0.3f);
             showResult = false;
+
+            // マップと目的地
+            OpenMap(true);
+            map.cursor = map.destinations.FindIndex(s => s.name.StartsWith("コンビニ"));
+            yield return new WaitForSecondsRealtime(0.5f);
+            ScreenCapture.CaptureScreenshot(Path("map_select.png"));
+            yield return new WaitForSecondsRealtime(0.3f);
+            ConfirmMap();
+            rig.SetMode(ViewMode.Top2D);
+            rig.wide = true;
+            yield return new WaitForSecondsRealtime(0.5f);
+            ScreenCapture.CaptureScreenshot(Path("trip_top.png"));
+            yield return new WaitForSecondsRealtime(0.3f);
+            rig.wide = false;
+            var dest = destination;
+            car.Spawn(Kit.ParkedRearAxle(dest, true), dest.yaw);
+            Physics.SyncTransforms();
+            rig.SetMode(ViewMode.Chase3D);
+            car.SetEngine(true);
+            car.SetEngine(false);
+            yield return new WaitForSecondsRealtime(0.5f);
+            ScreenCapture.CaptureScreenshot(Path("trip_result.png"));
+            yield return new WaitForSecondsRealtime(0.3f);
+            showResult = false;
+
             hud.SetMenu(true);
             yield return new WaitForSecondsRealtime(0.5f);
             ScreenCapture.CaptureScreenshot(Path("menu.png"));

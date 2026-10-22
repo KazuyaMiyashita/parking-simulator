@@ -16,6 +16,7 @@ namespace ParkingSim
         public bool parallel;
         public bool bothWays;      // 前向き/バックどちらで停めてもよい
         public float curbU = float.NaN; // 縦列: 縁石面の u 座標
+        public bool destination = true; // マップで目的地に選べる(空いていて、他人の契約区画でない)
 
         public Vector3 Forward => CarSpec.Forward(yaw);
         public Vector3 Right => CarSpec.Right(yaw);

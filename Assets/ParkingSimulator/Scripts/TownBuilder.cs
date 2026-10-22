@@ -215,6 +215,10 @@ namespace ParkingSim
 
             var mine = west[own];
             mine.name = "自分の区画";
+            // 月極駐車場は他人の契約区画なので、目的地にできるのは自分の区画だけ
+            foreach (var s in west) s.destination = false;
+            foreach (var s in east) s.destination = false;
+            mine.destination = true;
             Kit.GuideOutline(lot, mine);
             // 自分の区画の目印(区画の奥の壁に青い札)
             Vector3 sign = mine.ToWorld(0, -mine.length / 2 - 0.9f);

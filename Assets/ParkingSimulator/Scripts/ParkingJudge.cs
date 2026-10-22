@@ -19,6 +19,12 @@ namespace ParkingSim
         public int score;
         public string rank = "-";
         public readonly List<string> notes = new List<string>();
+
+        // 目的地ゲーム
+        public bool trip;                     // マップで選んだ目的地に停めた
+        public float tripTime, tripDistance;
+        public int tripCollisions, tripCurbHits;
+        public int prevBest = -1;             // それまでの自己ベスト(-1=初めて)
     }
 
     public static class ParkingJudge

@@ -322,6 +322,7 @@ namespace ParkingSim
 
                 bool occupied = i != r.keepEmpty &&
                                 ((r.fillNeighbors && Mathf.Abs(i - r.keepEmpty) == 1) || rng.NextDouble() < r.occupancy);
+                spot.destination = !occupied;
                 if (!occupied) continue;
 
                 var kind = VehicleBuilder.PickKind(r.kind, rng);
