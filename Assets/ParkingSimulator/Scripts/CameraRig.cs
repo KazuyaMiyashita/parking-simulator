@@ -63,7 +63,7 @@ namespace ParkingSim
         void LateUpdate()
         {
             if (inputEnabled) HandleInput();
-            UpdateCamera(Time.deltaTime);
+            if (Time.deltaTime > 0f) UpdateCamera(Time.deltaTime); // 一時停止中はカメラも止める
         }
 
         void HandleInput()
@@ -85,8 +85,7 @@ namespace ParkingSim
 
         Vector3 ChaseTarget()
         {
-            Vector3 back = -CarSpec.Forward(car.yaw);
-            if (car.gear == Gear.R) back = -back; // 後退中は進行方向が見えるよう前側から
+            Vector3 back = -CarSpec.Forward(car.yaw); // シフトに関係なく常に車の後方から
             return car.Center + back * 7.5f + Vector3.up * 4.2f;
         }
 

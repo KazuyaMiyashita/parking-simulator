@@ -50,6 +50,15 @@ namespace ParkingSim
                 presetSel = System.Array.IndexOf(ScenarioConfig.PresetNames, edit.name);
             }
             if (gm) gm.ApplyInputLock();
+            // メニュー表示中はゲームの時間と音を完全に止める
+            Time.timeScale = open ? 0f : 1f;
+            AudioListener.pause = open;
+        }
+
+        void OnDestroy()
+        {
+            Time.timeScale = 1f;
+            AudioListener.pause = false;
         }
 
         void Start()

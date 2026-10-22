@@ -28,7 +28,7 @@ namespace ParkingSim
         public float nearest = float.PositiveInfinity;
 
         CarController car;
-        AudioSource src;
+        AudioSource src, alarm;
         float beepTimer;
         int mask;
 
@@ -41,6 +41,28 @@ namespace ParkingSim
             src.spatialBlend = 0f;
             src.volume = 0.35f;
             src.clip = MakeBeep();
+
+            // 接触中に鳴り続ける警告音(ピーーー)
+            alarm = gameObject.AddComponent<AudioSource>();
+            alarm.playOnAwake = false;
+            alarm.spatialBlend = 0f;
+            alarm.volume = 0.35f;
+            alarm.loop = true;
+            alarm.clip = MakeTone();
+        }
+
+        /// <summary>ループ再生用の連続音(周期の整数倍の長さにしてつなぎ目のノイズを防ぐ)</summary>
+        static AudioClip MakeTone()
+        {
+            const int rate = 44100;
+            const float freq = 2100f;
+            int cycles = 210; // 0.1 秒
+            int n = Mathf.RoundToInt(rate * cycles / freq);
+            var data = new float[n];
+            for (int i = 0; i < n; i++) data[i] = Mathf.Sin(2 * Mathf.PI * cycles * i / n);
+            var clip = AudioClip.Create("Alarm", n, 1, rate, false);
+            clip.SetData(data, 0);
+            return clip;
         }
 
         static AudioClip MakeBeep()
@@ -62,6 +84,13 @@ namespace ParkingSim
         void LateUpdate()
         {
             Measure();
+            if (alarm)
+            {
+                bool on = car && car.touchingBody;
+                if (on && !alarm.isPlaying) alarm.Play();
+                else if (!on && alarm.isPlaying) alarm.Stop();
+            }
+            if (car && car.touchingBody) { beepTimer = 0; return; }
             if (!sound || !src || float.IsInfinity(nearest)) { beepTimer = 0; return; }
             float interval = nearest < 0.3f ? 0.08f : nearest < 0.5f ? 0.15f : nearest < 0.8f ? 0.3f : 0.55f;
             beepTimer -= Time.deltaTime;

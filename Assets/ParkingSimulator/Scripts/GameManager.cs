@@ -182,9 +182,9 @@ namespace ParkingSim
             yield return null;
             rig.follow = false;
             rig.SetMode(ViewMode.Top2D);
-            yield return new WaitForSeconds(0.5f);
+            yield return new WaitForSecondsRealtime(0.5f);
             ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(dir, "start_overview.png"));
-            yield return new WaitForSeconds(0.4f);
+            yield return new WaitForSecondsRealtime(0.4f);
             rig.follow = true;
             var spot = lot.target;
             var poses = new[]
@@ -201,21 +201,21 @@ namespace ParkingSim
                 foreach (ViewMode m in System.Enum.GetValues(typeof(ViewMode)))
                 {
                     rig.SetMode(m);
-                    yield return new WaitForSeconds(0.4f);
+                    yield return new WaitForSecondsRealtime(0.4f);
                     ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(dir, $"shot{n++}_{m}.png"));
-                    yield return new WaitForSeconds(0.4f);
+                    yield return new WaitForSecondsRealtime(0.4f);
                 }
             }
             car.gear = Gear.P;
             Judge(false);
             rig.SetMode(ViewMode.Top2D);
-            yield return new WaitForSeconds(0.4f);
+            yield return new WaitForSecondsRealtime(0.4f);
             ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(dir, $"shot{n++}_result.png"));
-            yield return new WaitForSeconds(0.4f);
+            yield return new WaitForSecondsRealtime(0.4f);
             hud.SetMenu(true);
-            yield return new WaitForSeconds(0.4f);
+            yield return new WaitForSecondsRealtime(0.4f);
             ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(dir, $"shot{n}_menu.png"));
-            yield return new WaitForSeconds(0.4f);
+            yield return new WaitForSecondsRealtime(0.4f);
             Application.Quit();
         }
     }
