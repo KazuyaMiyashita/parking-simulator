@@ -16,7 +16,8 @@ namespace ParkingSim
         public bool parallel;
         public bool bothWays;      // 前向き/バックどちらで停めてもよい
         public float curbU = float.NaN; // 縦列: 縁石面の u 座標
-        public bool destination = true; // マップで目的地に選べる(空いていて、他人の契約区画でない)
+        public bool destination = true; // 空いている(他の車が停まっていない)
+        public Place place;              // この区画がある場所(縦列駐車帯などは null)
 
         public Vector3 Forward => CarSpec.Forward(yaw);
         public Vector3 Right => CarSpec.Right(yaw);
@@ -40,11 +41,33 @@ namespace ParkingSim
         }
     }
 
-    public struct StartPoint
+    /// <summary>目的地にできる場所(自宅・お店など)。区画のどれかに停めてエンジンを切ると「到着」</summary>
+    public class Place
     {
+        public string id;          // 記録の保存に使う
         public string name;
-        public Vector3 rearAxle;
-        public float yaw;
+        public string note;        // マップに出す説明(駐車スペースの広さなど)
+        public bool far;           // 遠くのエリア(近くの目的地を全部回ると行けるようになる)
+        public bool home;
+        /// <summary>経路案内の行き先(道路から敷地に入ったところ)。複数あれば近い方へ案内する</summary>
+        public readonly List<Vector3> entrances = new List<Vector3>();
+        public readonly List<TargetSpot> spots = new List<TargetSpot>();
+
+        public Vector3 Center
+        {
+            get
+            {
+                if (spots.Count == 0) return entrances.Count > 0 ? entrances[0] : Vector3.zero;
+                Vector3 c = Vector3.zero;
+                foreach (var s in spots) c += s.center;
+                return c / spots.Count;
+            }
+        }
+
+        public void Add(IEnumerable<TargetSpot> list)
+        {
+            foreach (var s in list) { s.place = this; spots.Add(s); }
+        }
     }
 
     public struct Zone
@@ -60,25 +83,21 @@ namespace ParkingSim
     {
         public Transform root;
         public readonly List<TargetSpot> spots = new List<TargetSpot>();
-        public readonly List<StartPoint> starts = new List<StartPoint>();
         public readonly List<Zone> zones = new List<Zone>(); // 先に登録したものが優先
+        public readonly List<Place> places = new List<Place>();
+        /// <summary>経路案内に使う道の中心線。端点は近くの別の線につながる</summary>
+        public readonly List<List<Vector3>> navLines = new List<List<Vector3>>();
+        /// <summary>遠くのエリアへの道をふさぐ通行止めの柵(行けるようになったら消す)</summary>
+        public readonly List<GameObject> gates = new List<GameObject>();
+        public Vector3 homeRearAxle;
+        public float homeYaw;
+
+        public Place PlaceById(string id) => places.Find(p => p.id == id);
 
         public string ZoneName(Vector3 p)
         {
             foreach (var z in zones) if (z.Contains(p)) return z.name;
             return "公道";
-        }
-
-        public TargetSpot NearestSpot(Vector3 p, float maxDist)
-        {
-            TargetSpot best = null;
-            float bd = maxDist * maxDist;
-            foreach (var s in spots)
-            {
-                float d = (s.center - p).sqrMagnitude;
-                if (d < bd) { bd = d; best = s; }
-            }
-            return best;
         }
     }
 }

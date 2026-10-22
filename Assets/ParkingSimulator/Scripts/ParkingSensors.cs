@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace ParkingSim
 {
-    /// <summary>コーナー/バックセンサー(前後各4個)と警告音</summary>
+    /// <summary>コーナー/バックセンサー(前後各4個)と、接近・接触・後退の知らせる音</summary>
     public class ParkingSensors : MonoBehaviour
     {
         public struct Def
@@ -26,92 +26,98 @@ namespace ParkingSim
         public readonly bool[] active = new bool[Defs.Length];
         public bool sound = true;
         public float nearest = float.PositiveInfinity;
+        bool nearestFront;
 
         CarController car;
-        AudioSource src, alarm;
-        float beepTimer;
+        AudioSource beeps, tone, alarm, reverse;
+        AudioClip beepFront, beepRear, reverseChime;
+        float beepTimer, reverseTimer;
         float alarmTime;              // 今回の接触で警告音を鳴らしている時間
         const float AlarmMax = 3f;    // 接触中でも3秒で止める
+        const float ToneDist = 0.3f;  // これより近いと連続音
         int mask;
 
         public void Init(CarController c)
         {
             car = c;
             mask = Layers.Mask(Layers.Obstacle);
-            src = gameObject.AddComponent<AudioSource>();
-            src.playOnAwake = false;
-            src.spatialBlend = 0f;
-            src.volume = 0.35f;
-            src.clip = MakeBeep();
-
-            // 接触中に鳴り続ける警告音(ピーーー)
-            alarm = gameObject.AddComponent<AudioSource>();
-            alarm.playOnAwake = false;
-            alarm.spatialBlend = 0f;
-            alarm.volume = 0.35f;
-            alarm.loop = true;
-            alarm.clip = MakeTone();
+            beeps = NewSource(0.32f, false);
+            tone = NewSource(0f, true);
+            alarm = NewSource(0f, true);
+            reverse = NewSource(0.28f, false);
+            // 前のセンサーは高め、後ろは低めの音(どちらが近いか耳で分かるように)
+            beepFront = Chime.Clip("Beep Front", 2093f, 0.13f, 0.045f);
+            beepRear = Chime.Clip("Beep Rear", 1568f, 0.13f, 0.045f);
+            tone.clip = Chime.Loop("Proximity Tone", 1568f);
+            // 接触: はっきりした連続音(ピーーー)。2つの近い高さを重ねて少しうなりを持たせ、耳障りな純音を避ける
+            alarm.clip = Chime.Loop("Contact Alarm", 2349f, 2357f);
+            // R のときの車内のお知らせ音(ポーン・ポーン)
+            reverseChime = Chime.Clip("Reverse Chime", 1318.5f, 0.45f, 0.16f);
         }
 
-        /// <summary>ループ再生用の連続音(周期の整数倍の長さにしてつなぎ目のノイズを防ぐ)</summary>
-        static AudioClip MakeTone()
+        AudioSource NewSource(float vol, bool loop)
         {
-            const int rate = 44100;
-            const float freq = 2100f;
-            int cycles = 210; // 0.1 秒
-            int n = Mathf.RoundToInt(rate * cycles / freq);
-            var data = new float[n];
-            for (int i = 0; i < n; i++) data[i] = Mathf.Sin(2 * Mathf.PI * cycles * i / n);
-            var clip = AudioClip.Create("Alarm", n, 1, rate, false);
-            clip.SetData(data, 0);
-            return clip;
-        }
-
-        static AudioClip MakeBeep()
-        {
-            const int rate = 44100;
-            int n = (int)(rate * 0.07f);
-            var data = new float[n];
-            for (int i = 0; i < n; i++)
-            {
-                float t = (float)i / rate;
-                float env = Mathf.Clamp01(i / 200f) * Mathf.Clamp01((n - i) / 400f);
-                data[i] = Mathf.Sin(2 * Mathf.PI * 2100f * t) * env;
-            }
-            var clip = AudioClip.Create("Beep", n, 1, rate, false);
-            clip.SetData(data, 0);
-            return clip;
+            var a = gameObject.AddComponent<AudioSource>();
+            a.playOnAwake = false;
+            a.spatialBlend = 0f;
+            a.volume = vol;
+            a.loop = loop;
+            return a;
         }
 
         void LateUpdate()
         {
             Measure();
-            if (alarm)
+            float dt = Time.deltaTime;
+            if (dt <= 0f) return;
+
+            // 接触の警告音(3秒で止める)。鳴っている間はセンサー音を止める
+            bool touching = car && car.touchingBody;
+            alarmTime = touching ? alarmTime + dt : 0f;
+            Fade(alarm, touching && alarmTime < AlarmMax ? 0.3f : 0f, dt);
+
+            bool sensing = sound && !touching && !float.IsInfinity(nearest);
+            Fade(tone, sensing && nearest < ToneDist ? 0.26f : 0f, dt);
+            if (sensing && nearest >= ToneDist)
             {
-                bool touching = car && car.touchingBody;
-                alarmTime = touching ? alarmTime + Time.deltaTime : 0f;
-                bool on = touching && alarmTime < AlarmMax;
-                if (on && !alarm.isPlaying) alarm.Play();
-                else if (!on && alarm.isPlaying) alarm.Stop();
+                float interval = nearest < 0.5f ? 0.16f : nearest < 0.8f ? 0.3f : 0.55f;
+                beepTimer -= dt;
+                if (beepTimer <= 0f)
+                {
+                    beeps.PlayOneShot(nearestFront ? beepFront : beepRear);
+                    beepTimer = interval;
+                }
             }
-            if (car && car.touchingBody) { beepTimer = 0; return; }
-            if (!sound || !src || float.IsInfinity(nearest)) { beepTimer = 0; return; }
-            float interval = nearest < 0.3f ? 0.08f : nearest < 0.5f ? 0.15f : nearest < 0.8f ? 0.3f : 0.55f;
-            beepTimer -= Time.deltaTime;
-            if (beepTimer <= 0f)
+            else beepTimer = 0f;
+
+            // R のお知らせ音: センサーが鳴っていないときだけ、約 1 秒ごと
+            if (car && car.gear == Gear.R && !sensing && !touching)
             {
-                src.Play();
-                beepTimer = interval;
+                reverseTimer -= dt;
+                if (reverseTimer <= 0f)
+                {
+                    reverse.PlayOneShot(reverseChime);
+                    reverseTimer = 1.1f;
+                }
             }
+            else reverseTimer = 0f;
+        }
+
+        /// <summary>連続音の音量を短く上げ下げする(ブツッという音を避ける)</summary>
+        static void Fade(AudioSource a, float target, float dt)
+        {
+            a.volume = Mathf.MoveTowards(a.volume, target, dt * 8f);
+            if (a.volume > 0f && !a.isPlaying) a.Play();
+            else if (a.volume <= 0f && a.isPlaying) a.Stop();
         }
 
         public void Measure()
         {
             nearest = float.PositiveInfinity;
             if (!car) return;
-            bool moving = Mathf.Abs(car.speed) < 2.8f;
+            bool slow = Mathf.Abs(car.speed) < 2.8f; // 約 10km/h 未満で前のセンサーが働く
             bool rearOn = car.gear == Gear.R;
-            bool frontOn = (car.gear == Gear.D && moving) || rearOn;
+            bool frontOn = (car.gear == Gear.D && slow) || rearOn;
             for (int i = 0; i < Defs.Length; i++)
             {
                 var d = Defs[i];
@@ -126,7 +132,7 @@ namespace ParkingSim
                     if (Physics.Raycast(origin, dir, out var hit, d.range + 0.05f, mask, QueryTriggerInteraction.Ignore))
                         dist[i] = Mathf.Min(dist[i], Mathf.Max(0f, hit.distance - 0.05f));
                 }
-                nearest = Mathf.Min(nearest, dist[i]);
+                if (dist[i] < nearest) { nearest = dist[i]; nearestFront = d.front; }
             }
         }
     }

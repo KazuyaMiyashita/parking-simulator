@@ -46,7 +46,7 @@ namespace ParkingSim
                 Map(gp.buttonNorth, JoyButton.X); Map(gp.buttonWest, JoyButton.Y);
                 Map(gp.leftShoulder, JoyButton.L); Map(gp.rightShoulder, JoyButton.R);
                 Map(gp.leftTrigger, JoyButton.ZL); Map(gp.rightTrigger, JoyButton.ZR);
-                Map(gp.startButton, JoyButton.Capture); Map(gp.selectButton, JoyButton.Minus);
+                Map(gp.startButton, JoyButton.Plus); Map(gp.selectButton, JoyButton.Minus);
                 Map(gp.leftStickButton, JoyButton.LStick); Map(gp.rightStickButton, JoyButton.RStick);
                 Map(gp.dpad.up, JoyButton.Up); Map(gp.dpad.down, JoyButton.Down);
                 Map(gp.dpad.left, JoyButton.Left); Map(gp.dpad.right, JoyButton.Right);
@@ -68,6 +68,10 @@ namespace ParkingSim
     [DefaultExecutionOrder(-1000)]
     public class PadUpdater : MonoBehaviour
     {
-        void Update() => Pad.Poll();
+        void Update()
+        {
+            Pad.Poll();
+            Controls.Update();
+        }
     }
 }

@@ -19,39 +19,26 @@ namespace ParkingSim
         public float wheelDeg;     // ハンドル角(+右)
         public Gear gear = Gear.P;
         public float throttle, brake;
-        public bool parkingBrake;
-        public bool engineOn;
+        public bool steerHold;     // ハンドル固定(ZL / Space で切り替え)
 
         [Header("設定")]
         public bool creepEnabled; // オートマのクリープ現象
 
         [Header("操作")]
         public bool inputEnabled = true;
-        public bool mouseSteer;
-        public float steerRate = 450f; // ハンドルを回す速さ(度/秒)
+        public float steerRate = 540f; // 入力の角度へハンドルを回す速さ(度/秒)
 
         [Header("記録")]
-        public int collisions;
-        public int curbHits;       // 縁石にタイヤが当たった回数(脱輪)
-        public int directionChanges;
-        public float travelled;
-        public float driveTime;
+        public float travelled;    // 走った道のり(m)
         public bool touchingBody, touchingStop;
 
         public System.Action<string, Color> notify;
         public System.Action<Gear> gearChanged;
-        public System.Action<bool> engineChanged;
-        public System.Action<bool> parkingBrakeChanged;
+        public System.Action contact;
 
-        int lastMoveSign;
-        float segmentLength;
-        bool centering;
-        bool padSteering;         // 最後にハンドルを回したのが右スティック(離すと中立へ戻す)
+        bool regrab;              // ハンドル固定中にスティック(キー)を一度離した。次に倒すと固定を解いてつかみ直す
         int curbWheels;           // 縁石・歩道に乗っているタイヤの数
         readonly float[] wheelLift = new float[4]; // 段差で持ち上がったタイヤの高さ(見た目)
-        float engineHold;         // エンジン始動/停止ボタンを長押ししている時間
-        bool engineHoldArmed;
-        const float EngineHoldTime = 0.5f;
         float spinDeg;
         int obstacleMask, stopMask, curbMask;
         static readonly Gear[] Order = { Gear.P, Gear.R, Gear.N, Gear.D };
@@ -83,11 +70,7 @@ namespace ParkingSim
         {
             float dt = Time.deltaTime;
             if (dt <= 0f) return;
-            if (inputEnabled)
-            {
-                ReadInput(dt);
-                driveTime += dt;
-            }
+            if (inputEnabled) ReadInput(dt);
             else
             {
                 throttle = Mathf.MoveTowards(throttle, 0, 3f * dt);
@@ -110,143 +93,55 @@ namespace ParkingSim
         // ---------------------------------------------------------------- 入力
         void ReadInput(float dt)
         {
-            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-            bool left = Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow);
-            bool right = Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow);
-            bool acc = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow);
-            bool brk = Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow);
-            bool hard = Input.GetKey(KeyCode.Space);
-            // Joy-Con(L) / ゲームパッドの十字: ▲ アクセル, ▼ ブレーキ(押している間だけ)
-            acc |= Pad.Held(JoyButton.Up);
-            brk |= Pad.Held(JoyButton.Down);
+            // ペダル(押している長さで踏み込み量が増える)
+            throttle = Controls.Accel ? Mathf.MoveTowards(Mathf.Max(throttle, 0.05f), 1f, 0.6f * dt) : Mathf.MoveTowards(throttle, 0f, 3f * dt);
+            brake = Controls.Brake ? Mathf.MoveTowards(Mathf.Max(brake, 0.08f), 1f, 1.2f * dt) : Mathf.MoveTowards(brake, 0f, 4f * dt);
 
-            // 右スティック: 左右でハンドルを回す
-            float padSteer = PadAxis(Pad.RightStick.x);
+            ReadSteering(dt);
 
-            // ペダル(キーを押している長さで踏み込み量が増える)
-            throttle = acc ? Mathf.MoveTowards(Mathf.Max(throttle, 0.05f), 1f, 0.6f * dt) : Mathf.MoveTowards(throttle, 0f, 3f * dt);
-            if (hard) brake = 1f;
-            else if (brk) brake = Mathf.MoveTowards(Mathf.Max(brake, 0.08f), 1f, 1.2f * dt);
-            else brake = Mathf.MoveTowards(brake, 0f, 4f * dt);
-
-            ReadEngineSwitch(dt);
-
-            // ステアリング
-            float maxW = CarSpec.MaxWheelDeg;
-            if (Input.GetKeyDown(KeyCode.C)) centering = true;
-            if (Input.GetKeyDown(KeyCode.M))
-            {
-                mouseSteer = !mouseSteer;
-                notify?.Invoke(mouseSteer ? "マウスハンドル ON(マウスの左右位置=ハンドル角)" : "マウスハンドル OFF", Color.white);
-            }
-            if (left || right || padSteer != 0f) centering = false;
-            if (padSteer != 0f) padSteering = true;
-            else if (left || right || mouseSteer || centering) padSteering = false;
-            if (mouseSteer)
-            {
-                float mx = Mathf.Clamp(Input.mousePosition.x / Mathf.Max(1, Screen.width), 0f, 1f) * 2f - 1f;
-                float target = Mathf.Clamp(mx * maxW * 1.15f, -maxW, maxW);
-                wheelDeg = Mathf.MoveTowards(wheelDeg, target, 1400f * dt);
-            }
-            else if (left || right)
-            {
-                float rate = steerRate * (shift ? 2f : 1f);
-                wheelDeg += ((right ? 1f : 0f) - (left ? 1f : 0f)) * rate * dt;
-            }
-            else if (padSteer != 0f)
-            {
-                // スティックを倒した量に比例した速さでハンドルを回す
-                wheelDeg += padSteer * steerRate * (shift ? 2f : 1.5f) * dt;
-            }
-            else if (padSteering && !Pad.Held(JoyButton.R))
-            {
-                // スティックを離すと手を離したハンドルのように中立へ戻る(走っているほど速く)。R を押している間は保持
-                float rate = Mathf.Lerp(360f, 900f, Mathf.Abs(speed) / 3f);
-                wheelDeg = Mathf.MoveTowards(wheelDeg, 0f, rate * dt);
-            }
-            else if (centering)
-            {
-                wheelDeg = Mathf.MoveTowards(wheelDeg, 0f, 720f * dt);
-                if (Mathf.Abs(wheelDeg) < 0.01f) centering = false;
-            }
-            wheelDeg = Mathf.Clamp(wheelDeg, -maxW, maxW);
-
-            // シフト(エンジン停止中は TryShift が受け付けない)
-            if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1)) TryShift(Gear.P);
-            if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2)) TryShift(Gear.R);
-            if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)) TryShift(Gear.N);
-            if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4)) TryShift(Gear.D);
-            // Q / ZL: P 側へ1段, E / L: D 側へ1段(P → R → N → D)。
-            // エンジン停止中の L は始動の長押しに使うのでシフトとしては読まない
             int idx = System.Array.IndexOf(Order, gear);
-            if ((Input.GetKeyDown(KeyCode.Q) || engineOn && Pad.Down(JoyButton.ZL)) && idx > 0) TryShift(Order[idx - 1]);
-            if ((Input.GetKeyDown(KeyCode.E) || engineOn && Pad.Down(JoyButton.L)) && idx < Order.Length - 1) TryShift(Order[idx + 1]);
-
-            // 電動パーキングブレーキ(アクセルで自動解除)
-            if (Input.GetKeyDown(KeyCode.B))
-            {
-                parkingBrake = !parkingBrake;
-                notify?.Invoke(parkingBrake ? "パーキングブレーキ ON" : "パーキングブレーキ OFF", Color.white);
-                parkingBrakeChanged?.Invoke(parkingBrake);
-            }
-            if (parkingBrake && throttle > 0.1f && (gear == Gear.D || gear == Gear.R))
-            {
-                parkingBrake = false;
-                notify?.Invoke("パーキングブレーキ 自動解除", Color.white);
-                parkingBrakeChanged?.Invoke(false);
-            }
+            if (Controls.ShiftDownDown && idx > 0) TryShift(Order[idx - 1]);
+            if (Controls.ShiftUpDown && idx < Order.Length - 1) TryShift(Order[idx + 1]);
         }
 
         /// <summary>
-        /// ブレーキを踏みながら長押しでエンジンの始動/停止。
-        /// 始動: Joy-Con L(停止中), 停止: Joy-Con ZL(P のとき)。キーボードは I で両方。
-        /// 押し始めた時点で条件を満たしているときだけ数える(R から ZL で P に入れた勢いで止まらないように)
+        /// スティックの角度(キーは押している間いっぱい)がハンドルの目標角。離すと中央へ徐々に戻る。
+        /// 固定中は離しても角度を保ち、一度離してから倒し直すと固定を解いてつかみ直す
         /// </summary>
-        void ReadEngineSwitch(float dt)
+        void ReadSteering(float dt)
         {
-            JoyButton btn = engineOn ? JoyButton.ZL : JoyButton.L;
-            bool down = Pad.Down(btn) || Input.GetKeyDown(KeyCode.I);
-            bool held = Pad.Held(btn) || Input.GetKey(KeyCode.I);
-            if (down) { engineHoldArmed = !engineOn || gear == Gear.P; engineHold = 0f; }
-            if (!held) { engineHoldArmed = false; engineHold = 0f; return; }
-            if (!engineHoldArmed) return;
-            if (brake < 0.05f || (engineOn && gear != Gear.P)) { engineHold = 0f; return; }
-            engineHold += dt;
-            if (engineHold < EngineHoldTime) return;
-            engineHoldArmed = false;
-            engineHold = 0f;
-            SetEngine(!engineOn);
+            float maxW = CarSpec.MaxWheelDeg;
+            float input = Controls.Steer;
+            bool active = input != 0f;
+            if (Controls.SteerHoldToggle)
+            {
+                steerHold = !steerHold;
+                regrab = !active;
+                notify?.Invoke(steerHold ? "ハンドル固定" : "ハンドル固定を解除", Color.white);
+            }
+            if (steerHold)
+            {
+                if (!active) regrab = true;
+                else if (regrab) steerHold = false;
+                else return;
+            }
+            if (active) wheelDeg = Mathf.MoveTowards(wheelDeg, input * maxW, steerRate * dt);
+            else wheelDeg = Mathf.MoveTowards(wheelDeg, 0f, Mathf.Lerp(360f, 900f, Mathf.Abs(speed) / 3f) * dt);
+            wheelDeg = Mathf.Clamp(wheelDeg, -maxW, maxW);
         }
 
-        public void SetEngine(bool on)
-        {
-            if (on == engineOn) return;
-            engineOn = on;
-            gear = Gear.P;
-            if (!on) throttle = 0f;
-            notify?.Invoke(on ? "エンジン始動(シフト P)" : "エンジン停止", Color.white);
-            engineChanged?.Invoke(on);
-        }
-
-        /// <summary>スティックの軸ごとの遊び(上に倒したつもりでハンドルが少し回る、などを防ぐ)</summary>
-        static float PadAxis(float v)
-        {
-            const float dead = 0.25f;
-            float a = Mathf.Abs(v);
-            return a < dead ? 0f : Mathf.Sign(v) * (a - dead) / (1f - dead);
-        }
-
+        /// <summary>
+        /// シフトを切り替える。ブレーキは問わず、走行中の危険な切り替えだけ断る
+        /// (動いている間の P、前進中の R、後退中の D)
+        /// </summary>
         public void TryShift(Gear g)
         {
             if (g == gear) return;
-            if (!engineOn)
+            const float moving = 0.4f;
+            bool danger = (g == Gear.P && Mathf.Abs(speed) > moving) || (g == Gear.R && speed > moving) || (g == Gear.D && speed < -moving);
+            if (danger)
             {
-                notify?.Invoke("エンジンを始動してください", new Color(1f, 0.8f, 0.3f));
-                return;
-            }
-            if (Mathf.Abs(speed) > 0.4f && g != Gear.N)
-            {
-                notify?.Invoke("停止してからシフト操作してください", new Color(1f, 0.8f, 0.3f));
+                notify?.Invoke("止まってからシフト操作してください", new Color(1f, 0.8f, 0.3f));
                 return;
             }
             gear = g;
@@ -275,7 +170,7 @@ namespace ParkingSim
                     drive = dir * (creep + thr);
                 }
                 speed += drive * h;
-                float resist = 0.12f + 0.002f * speed * speed + brake * 7.5f + (parkingBrake ? 6f : 0f);
+                float resist = 0.12f + 0.002f * speed * speed + brake * 7.5f;
                 if (Mathf.Abs(speed) <= resist * h) speed = 0f;
                 else speed -= Mathf.Sign(speed) * resist * h;
             }
@@ -315,8 +210,8 @@ namespace ParkingSim
             {
                 if (!touchingBody && Mathf.Abs(speed) > 0.02f)
                 {
-                    collisions++;
-                    notify?.Invoke($"接触しました!(速度 {Mathf.Abs(SpeedKmh):0.0} km/h)", new Color(1f, 0.3f, 0.25f));
+                    notify?.Invoke("接触しました", new Color(1f, 0.3f, 0.25f));
+                    contact?.Invoke();
                 }
                 touchingBody = true;
             }
@@ -330,7 +225,6 @@ namespace ParkingSim
 
         /// <summary>
         /// 縁石・歩道は止めずに乗り上げさせる。タイヤが段差に当たるたびに速度が落ち、降りるときも少し落ちる。
-        /// 縁石に乗った時点で脱輪として1回数える(乗っている間は数え直さない)
         /// </summary>
         void UpdateCurb()
         {
@@ -338,10 +232,7 @@ namespace ParkingSim
             if (n > curbWheels)
             {
                 if (curbWheels == 0 && Mathf.Abs(speed) > 0.02f)
-                {
-                    curbHits++;
-                    notify?.Invoke("縁石に乗り上げました(脱輪)", new Color(1f, 0.7f, 0.3f));
-                }
+                    notify?.Invoke("縁石に乗り上げました", new Color(1f, 0.7f, 0.3f));
                 speed *= 0.5f;
             }
             else if (n < curbWheels) speed *= 0.85f;
@@ -352,19 +243,6 @@ namespace ParkingSim
         {
             rearAxle = r; yaw = y;
             travelled += Mathf.Abs(ds);
-            // 切り返し回数: 逆方向へ 5cm 以上動いたら1回
-            int s = ds > 0 ? 1 : -1;
-            if (s == lastMoveSign) segmentLength = 0f;
-            else
-            {
-                segmentLength += Mathf.Abs(ds);
-                if (segmentLength > 0.05f)
-                {
-                    if (lastMoveSign != 0) directionChanges++;
-                    lastMoveSign = s;
-                    segmentLength = 0f;
-                }
-            }
             spinDeg += ds / CarSpec.TireRadius * Mathf.Rad2Deg;
         }
 
@@ -449,27 +327,16 @@ namespace ParkingSim
             foreach (var b in parts.reverseLights) if (b) b.sharedMaterial = gear == Gear.R ? parts.reverseOn : parts.reverseOff;
         }
 
-        /// <summary>指定位置に停車した状態(エンジン停止・P・パーキングブレーキ ON)で置き直す</summary>
+        /// <summary>指定位置に停車した状態(P)で置き直す。エンジンは常にかかっている</summary>
         public void Spawn(Vector3 rear, float yawDeg)
         {
             SetPose(rear, yawDeg);
             gear = Gear.P;
-            parkingBrake = true;
-            engineOn = false;
-            engineHold = 0f; engineHoldArmed = false;
             wheelDeg = 0f;
+            steerHold = false;
             throttle = brake = 0f;
-            centering = padSteering = false;
-            ResetStats();
-            UpdateVisuals();
-        }
-
-        public void ResetStats()
-        {
-            curbHits = 0;
-            collisions = 0; directionChanges = 0; travelled = 0; driveTime = 0;
-            lastMoveSign = 0; segmentLength = 0;
             touchingBody = touchingStop = false;
+            UpdateVisuals();
         }
     }
 }

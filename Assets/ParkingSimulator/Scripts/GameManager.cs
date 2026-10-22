@@ -5,45 +5,76 @@ using UnityEngine.Rendering;
 
 namespace ParkingSim
 {
+    /// <summary>運転中の画面の上に重ねて開く画面。開いている間はゲームの時間を止める</summary>
+    public enum Overlay { None, Menu, CarSelect, Help, Map }
+
+    /// <summary>駐車枠に収まって P に入れたときの表示内容</summary>
+    public class Arrival
+    {
+        public Place place;        // null なら目的地ではない枠(縦列駐車帯など)
+        public bool first;         // その場所に初めて停めた
+        public bool unlocked;      // これで遠くのエリアに行けるようになった
+        public bool cleared;       // これで全部の場所を回った
+        public int parkings;
+        public float distance;
+    }
+
     /// <summary>
-    /// シミュレーター全体の管理。空のシーンでも再生すると自動で生成される。
-    /// 世界は起動時に一度だけ作り、やり直しは選んだスタート地点へ車を置き直すだけ。
+    /// ゲーム全体の管理。空のシーンでも再生すると自動で生成される。
+    /// 自宅のカーポートに P で停まった状態から始まり、マップで目的地を決めて(決めなくてもよい)運転する。
+    /// 駐車枠に収まって P に入れると駐車回数と総走行距離を記録する。点数は付けない。
     /// </summary>
     [DefaultExecutionOrder(100)] // 車の入力処理より後
     public class GameManager : MonoBehaviour
     {
-        [Header("補助機能")]
-        public bool showPath = true;
-        public bool sensorSound = true;
-        public bool showSensors = true;
-        public bool creep;
-        public float steerRate = 450f;
-
-        [System.NonSerialized] public int startIndex;
+        [System.NonSerialized] public SaveData save;
         [System.NonSerialized] public CarController car;
         [System.NonSerialized] public ParkingSensors sensors;
         [System.NonSerialized] public PathGuide path;
+        [System.NonSerialized] public ClearanceProbe clearance;
         [System.NonSerialized] public CameraRig rig;
         [System.NonSerialized] public HUD hud;
         [System.NonSerialized] public WorldResult world;
-        [System.NonSerialized] public JudgeResult lastResult;
-        [System.NonSerialized] public bool showResult;
-
-        // 目的地ゲーム
         [System.NonSerialized] public MapView map;
-        [System.NonSerialized] public TargetSpot destination; // マップで選んだ目的地(null=自由に練習)
-        [System.NonSerialized] public int arrivals;           // 目的地に駐車できた回数
-        public readonly Dictionary<TargetSpot, int> bestScores = new Dictionary<TargetSpot, int>();
-        DestinationMarker marker;
-        ParkingJudge.Baseline tripBase, destBase; // 目的地を決めた時点 / 目的地に近づいた時点の記録
-        float tripStartDistance;
+        [System.NonSerialized] public Overlay overlay;
+        [System.NonSerialized] public Arrival arrival;
 
-        /// <summary>近くの駐車枠(位置ガイドと判定に使う)</summary>
-        [System.NonSerialized] public TargetSpot nearSpot;
-        ParkingJudge.Baseline baseline;
+        // 目的地と経路(カーナビ)
+        [System.NonSerialized] public Place destination;
+        [System.NonSerialized] public readonly List<Vector3> route = new List<Vector3>();
+        [System.NonSerialized] public float routeLength;
+        /// <summary>マップに並べる順(近くの目的地 → 遠くの目的地 → 自宅)</summary>
+        [System.NonSerialized] public readonly List<Place> mapPlaces = new List<Place>();
+        [System.NonSerialized] public readonly NavGuide guide = new NavGuide();
+        Navigator nav;
+        DestinationMarker marker;
+        CarAudio carAudio;
+        float routeTimer;
+        bool guideStarted;
+        readonly List<Vector3> routeTmp = new List<Vector3>();
+        /// <summary>目的地の敷地の入口に着いて、案内を終えた(あとは空いている枠に停めるだけ)</summary>
+        [System.NonSerialized] public bool guideEnded;
+
+        // メニュー
+        [System.NonSerialized] public readonly List<MenuItem> menu = new List<MenuItem>();
+        [System.NonSerialized] public int menuCursor, carCursor;
+        [System.NonSerialized] public bool resetArmed;
+        public const int CarSlots = 3;
+
+        float lastTravelled, travelledAtPark;
         bool initialized;
 
-        const float NearRange = 9f; // この距離まで近づいた区画を対象にする
+        /// <summary>同じ場所でエンジンを切り直しても数えないよう、前回の駐車からこれだけ走ったときだけ数える</summary>
+        const float MinMoveBetweenParks = 3f;
+        static readonly string[] PlaceOrder = { "conveni", "super", "shop1", "friend", "shop2", "shop3", "home" };
+
+        public class MenuItem
+        {
+            public string label;
+            public System.Func<string> value;
+            public System.Action confirm;
+            public System.Action<int> adjust; // 左右
+        }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void Boot()
@@ -58,6 +89,7 @@ namespace ParkingSim
         {
             if (initialized) return;
             initialized = true;
+            save = SaveData.Load();
 
             // シーンに既存のカメラ/ライトがあれば無効化(このシミュレーターが自前で用意する)
             foreach (var c in FindObjectsByType<Camera>(FindObjectsSortMode.None))
@@ -73,6 +105,7 @@ namespace ParkingSim
             if (!TryGetComponent<PadUpdater>(out _)) gameObject.AddComponent<PadUpdater>();
             hud.gm = this;
             BuildWorld();
+            BuildMenu();
 
             if (Application.isPlaying)
             {
@@ -105,316 +138,438 @@ namespace ParkingSim
         {
             var root = new GameObject("World");
             world = WorldBuilder.Build(root.transform);
+            foreach (var id in PlaceOrder)
+            {
+                var p = world.PlaceById(id);
+                if (p != null) mapPlaces.Add(p);
+            }
 
             var parts = VehicleBuilder.BuildOwnCar(root.transform);
             car = parts.gameObject.AddComponent<CarController>();
             car.Init(parts);
             car.notify = (msg, col) => { if (hud) hud.Toast(msg, col); };
             car.gearChanged = OnGearChanged;
-            car.engineChanged = OnEngineChanged;
 
             sensors = parts.gameObject.AddComponent<ParkingSensors>();
             sensors.Init(car);
+            clearance = parts.gameObject.AddComponent<ClearanceProbe>();
+            clearance.Init(car);
 
             // 警告音の AudioSource と分けるため子オブジェクトに付ける(OnAudioFilterRead は同じオブジェクトの音源に掛かる)
-            Util.Child("Car Audio", parts.transform, Vector3.zero).AddComponent<CarAudio>().Init(car);
+            carAudio = Util.Child("Car Audio", parts.transform, Vector3.zero).AddComponent<CarAudio>();
+            carAudio.Init(car);
 
             path = Util.Child("Path Guide", root.transform, Vector3.zero).AddComponent<PathGuide>();
             path.Init(car);
 
-            map = new MapView(transform, world);
+            map = new MapView(transform);
+            nav = new Navigator(world);
             marker = Util.Child("Destination Marker", root.transform, Vector3.zero).AddComponent<DestinationMarker>();
-            marker.Init(car);
+            marker.Init();
+            UpdateGates();
 
             Physics.SyncTransforms();
             rig.Attach(car);
-            Respawn();
+            GoHome();
         }
 
-        /// <summary>選んだスタート地点に停車した状態で置き直す</summary>
-        public void Respawn()
+        /// <summary>自宅のカーポートに P で停まった状態に戻す</summary>
+        public void GoHome()
         {
-            startIndex = Mathf.Clamp(startIndex, 0, world.starts.Count - 1);
-            var sp = world.starts[startIndex];
-            car.Spawn(sp.rearAxle, sp.yaw);
-            car.steerRate = steerRate;
-            showResult = false;
-            lastResult = null;
-            nearSpot = null;
-            baseline = ParkingJudge.Baseline.Of(car);
-            // 目的地はそのままで、スタート地点から数え直す
-            tripBase = destBase = baseline;
-            tripStartDistance = car.travelled;
+            car.Spawn(world.homeRearAxle, world.homeYaw);
+            arrival = null;
+            lastTravelled = travelledAtPark = car.travelled;
             rig.Snap();
-            ApplyInputLock();
         }
 
         void OnDestroy()
         {
             map?.Release();
+            Speech.Stop();
+            Time.timeScale = 1f;
+            AudioListener.pause = false;
         }
 
-        // ---------------------------------------------------------------- 目的地ゲーム
-        public void SetDestination(TargetSpot s)
-        {
-            destination = s;
-            marker.Show(s);
-            tripBase = destBase = ParkingJudge.Baseline.Of(car);
-            tripStartDistance = car.travelled;
-            if (s != null && hud) hud.Toast($"目的地: {s.name}", new Color(1f, 0.7f, 0.3f), 3f);
-        }
+        void OnApplicationQuit() => save?.Save();
 
-        public void OpenMap(bool open)
+        // ---------------------------------------------------------------- 進み具合
+        /// <summary>近くの目的地(自宅以外)を全部回ると、遠くのエリアに行ける</summary>
+        public bool FarUnlocked
         {
-            if (!hud || map == null) return;
-            hud.mapOpen = open;
-            if (open)
+            get
             {
-                showResult = false;
-                map.Render();
-                int i = destination != null ? map.destinations.IndexOf(destination) : -1;
-                if (i >= 0) map.cursor = i;
-                else map.SelectNearest(car.Center);
+                foreach (var p in world.places)
+                    if (!p.home && !p.far && !save.Visited(p)) return false;
+                return true;
             }
-            hud.ApplyPause();
-            ApplyInputLock();
         }
 
-        public void ConfirmMap()
-        {
-            if (map.Selected == null) return;
-            SetDestination(map.Selected);
-            OpenMap(false);
-        }
+        public bool Locked(Place p) => p.far && !FarUnlocked;
 
-        /// <summary>今いる場所から 30m 以上離れた候補からランダムに選ぶ</summary>
-        public void PickRandom()
+        bool AllVisited
         {
-            var far = new List<int>();
-            for (int i = 0; i < map.destinations.Count; i++)
-                if ((map.destinations[i].center - car.Center).sqrMagnitude > 30f * 30f && map.destinations[i] != destination) far.Add(i);
-            if (far.Count > 0) map.cursor = far[Random.Range(0, far.Count)];
-        }
-
-        void MapInput()
-        {
-            Vector2 dir = Pad.LeftStick + Pad.RightStick;
-            if (Pad.Held(JoyButton.Up) || Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W)) dir.y += 1f;
-            if (Pad.Held(JoyButton.Down) || Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S)) dir.y -= 1f;
-            if (Pad.Held(JoyButton.Right) || Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D)) dir.x += 1f;
-            if (Pad.Held(JoyButton.Left) || Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A)) dir.x -= 1f;
-            map.Steer(dir);
-            if (Pad.Down(JoyButton.A) || Pad.Down(JoyButton.LStick) || Input.GetKeyDown(KeyCode.Return) ||
-                Input.GetKeyDown(KeyCode.KeypadEnter) || Input.GetKeyDown(KeyCode.Space))
-                ConfirmMap();
-            else if (Pad.Down(JoyButton.X) || Input.GetKeyDown(KeyCode.R)) PickRandom();
-            else if (Pad.Down(JoyButton.Y) || Input.GetKeyDown(KeyCode.Delete))
+            get
             {
-                if (destination != null) hud.Toast("目的地を取り消しました", Color.white);
-                SetDestination(null);
+                bool anyFar = false;
+                foreach (var p in world.places)
+                {
+                    anyFar |= p.far;
+                    if (!p.home && !save.Visited(p)) return false;
+                }
+                return anyFar;
             }
-            else if (Pad.Down(JoyButton.B)) OpenMap(false);
         }
 
-        /// <summary>目的地に停めてエンジンを切った(または Enter で判定した)</summary>
-        void FinishTrip()
+        void UpdateGates()
         {
-            var r = ParkingJudge.Evaluate(destination, car, destBase);
-            r.trip = true;
-            r.tripTime = car.driveTime - tripBase.time;
-            r.tripDistance = car.travelled - tripStartDistance;
-            r.tripCollisions = car.collisions - tripBase.collisions;
-            r.tripCurbHits = car.curbHits - tripBase.curbHits;
-            r.prevBest = bestScores.TryGetValue(destination, out int best) ? best : -1;
-            if (r.score > r.prevBest) bestScores[destination] = r.score;
-            arrivals++;
-            lastResult = r;
-            showResult = true;
-            destination = null;
-            marker.Show(null);
-        }
-
-        void OnEngineChanged(bool on)
-        {
-            if (!on) Judge(true); // エンジンを止めたら近くの駐車枠で自動判定
+            bool open = FarUnlocked;
+            foreach (var g in world.gates) if (g) g.SetActive(!open);
         }
 
         void OnGearChanged(Gear g)
         {
             if (hud) hud.Toast($"シフト: {g}", Color.white, 1.2f);
+            if (g == Gear.P) CheckParking();
+            else arrival = null;
         }
 
-        public void Judge(bool auto)
+        /// <summary>P に入れたとき、駐車枠に収まっていれば記録して到着を表示する</summary>
+        void CheckParking()
         {
-            if (destination != null && ParkingJudge.Measure(destination, car).nearTarget)
+            var fit = ParkingCheck.Find(world, car, out var spot);
+            if (fit == ParkingCheck.Fit.Partial)
             {
-                FinishTrip();
+                hud.Toast("車体が枠からはみ出しています", new Color(1f, 0.8f, 0.3f), 4f);
                 return;
             }
-            if (nearSpot == null)
+            if (fit != ParkingCheck.Fit.Inside || car.travelled - travelledAtPark < MinMoveBetweenParks) return;
+
+            travelledAtPark = car.travelled;
+            bool wasUnlocked = FarUnlocked;
+            var a = new Arrival { place = spot.place };
+            save.parkings++;
+            if (a.place != null && !save.Visited(a.place))
             {
-                if (!auto && hud) hud.Toast("近くに駐車枠がありません", Color.white);
-                return;
+                a.first = true;
+                save.visited.Add(a.place.id);
             }
-            var r = ParkingJudge.Evaluate(nearSpot, car, baseline);
-            if (auto && !r.nearTarget) return;
-            if (destination != null && r.nearTarget) r.notes.Insert(0, $"ここは目的地({destination.name})ではありません");
-            lastResult = r;
-            showResult = true;
+            if (a.place != null && a.place == destination) SetDestination(null);
+            a.unlocked = !wasUnlocked && FarUnlocked;
+            if (a.unlocked) UpdateGates();
+            if (!save.cleared && AllVisited) save.cleared = a.cleared = true;
+            a.parkings = save.parkings;
+            a.distance = save.distance;
+            arrival = a;
+            save.Save();
         }
 
-        void UpdateNearSpot()
+        // ---------------------------------------------------------------- 目的地
+        public void SetDestination(Place p)
         {
-            // 目的地の近くでは目的地を優先する(位置ガイドも目的地に対して出す)
-            bool nearDest = destination != null && (destination.center - car.Center).sqrMagnitude < NearRange * NearRange;
-            var s = nearDest ? destination : world.NearestSpot(car.Center, NearRange);
-            if (destination != null && !nearDest) destBase = ParkingJudge.Baseline.Of(car);
-            // 区画から離れている間は記録の起点を更新し続ける(近づいてからの接触・切り返しだけを数える)
-            if (s == null) baseline = ParkingJudge.Baseline.Of(car);
-            else if (s != nearSpot && nearSpot == null) baseline = ParkingJudge.Baseline.Of(car);
-            nearSpot = s;
+            destination = p;
+            marker.Show(p);
+            route.Clear();
+            routeLength = 0f;
+            routeTimer = 0f;
+            guide.Reset();
+            guideStarted = p != null;
+            guideEnded = false;
+            if (p == null) Speech.Stop();
+            else UpdateRoute();
         }
+
+        void UpdateRoute()
+        {
+            string say = StepGuide();
+            if (say != null && overlay == Overlay.None) Speech.Say(say, save.volume);
+        }
+
+        /// <summary>経路を引き直し、話すべき案内があれば返す</summary>
+        string StepGuide()
+        {
+            if (destination == null || guideEnded) return null;
+            RouteToDestination();
+            string say;
+            if (routeLength < ArriveDist)
+            {
+                // 敷地に入ったら案内を終える(駐車場の中までは案内しない)
+                guideEnded = true;
+                route.Clear();
+                say = "目的地に到着しました。案内を終了します。";
+            }
+            else
+            {
+                say = guide.Update(route, routeLength, NearDestination, guideStarted);
+                guideStarted = false;
+            }
+            return say;
+        }
+
+        /// <summary>入口がいくつかあるときは、道のりが短い方へ案内する</summary>
+        void RouteToDestination()
+        {
+            routeLength = float.MaxValue;
+            foreach (var e in destination.entrances)
+            {
+                float len = nav.Route(car.Center, e, routeTmp);
+                if (routeTmp.Count == 0 || len >= routeLength) continue;
+                routeLength = len;
+                route.Clear();
+                route.AddRange(routeTmp);
+            }
+            if (routeLength == float.MaxValue) { routeLength = 0f; route.Clear(); }
+        }
+
+        const float ArriveDist = 4f, NearDist = 40f;
+
+        /// <summary>目的地の入口の近くまで来た(経路の残りで見る)</summary>
+        public bool NearDestination => destination != null && !guideEnded && route.Count > 1 && routeLength < NearDist;
+
+        // ---------------------------------------------------------------- 画面
+        public void SetOverlay(Overlay o)
+        {
+            if (o != Overlay.Menu) resetArmed = false;
+            if (o == Overlay.Map && overlay != Overlay.Map)
+            {
+                map.Render();
+                int i = destination != null ? mapPlaces.IndexOf(destination) : -1;
+                if (i < 0) i = mapPlaces.FindIndex(p => !save.Visited(p) && !Locked(p));
+                map.cursor = Mathf.Max(0, i);
+            }
+            if (o == Overlay.CarSelect) carCursor = save.carIndex;
+            if (overlay == Overlay.Menu && o == Overlay.None) save.Save();
+            overlay = o;
+            bool paused = o != Overlay.None;
+            Time.timeScale = paused ? 0f : 1f;
+            AudioListener.pause = paused;
+            carAudio.paused = paused;
+            if (paused) Speech.Stop();
+            car.inputEnabled = rig.inputEnabled = !paused;
+        }
+
+        void BuildMenu()
+        {
+            string OnOff(bool v) => v ? "ON" : "OFF";
+            void Add(string label, System.Func<string> value, System.Action confirm, System.Action<int> adjust = null) =>
+                menu.Add(new MenuItem { label = label, value = value, confirm = confirm, adjust = adjust });
+
+            Add("運転に戻る", null, () => SetOverlay(Overlay.None));
+            Add("車の選択", () => CarNames[save.carIndex], () => SetOverlay(Overlay.CarSelect));
+            Add("クリープ現象", () => OnOff(save.creep), () => save.creep = !save.creep, _ => save.creep = !save.creep);
+            Add("センサー音", () => OnOff(save.sensorSound), () => save.sensorSound = !save.sensorSound, _ => save.sensorSound = !save.sensorSound);
+            Add("他の車などとの距離(3D)", () => OnOff(save.clearance3D), () => save.clearance3D = !save.clearance3D, _ => save.clearance3D = !save.clearance3D);
+            Add("音量", () => $"{Mathf.RoundToInt(save.volume * 100)}%",
+                () => save.volume = save.volume >= 0.99f ? 0f : Mathf.Min(1f, save.volume + 0.1f),
+                d => save.volume = Mathf.Clamp01(Mathf.Round((save.volume + d * 0.1f) * 10f) / 10f));
+            Add("操作説明", null, () => SetOverlay(Overlay.Help));
+            Add("自宅に戻る", null, () => { GoHome(); SetOverlay(Overlay.None); });
+            Add("記録をリセット", () => resetArmed ? "もう一度決定するとリセットします" : "",
+                () =>
+                {
+                    if (!resetArmed) { resetArmed = true; return; }
+                    resetArmed = false;
+                    save.ResetRecords();
+                    save.Save();
+                    UpdateGates();
+                    hud.Toast("記録をリセットしました", Color.white);
+                });
+            Add("ゲームを終了", null, () => { save.Save(); Application.Quit(); });
+        }
+
+        /// <summary>車の選択の枠(2台目以降は中身なし)</summary>
+        public static readonly string[] CarNames = { "インプレッサ SPORT", "(空き)", "(空き)" };
 
         void Update()
         {
             if (!car) return;
-            UpdateNearSpot();
-            bool menu = hud && hud.menuOpen;
-            bool mapOpen = hud && hud.mapOpen;
-            // Esc / F1 / Joy-Con(L) のキャプチャーボタン: 設定メニュー(マップが開いていればマップを閉じる)
-            if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.F1) || Pad.Down(JoyButton.Capture))
+            save.distance += car.travelled - lastTravelled;
+            lastTravelled = car.travelled;
+
+            switch (overlay)
             {
-                if (mapOpen) OpenMap(false);
-                else if (showResult && !menu) showResult = false;
-                else hud.SetMenu(!menu);
+                case Overlay.None:
+                    if (Controls.MenuToggle) { menuCursor = 0; SetOverlay(Overlay.Menu); }
+                    else if (Controls.MapToggle)
+                    {
+                        if (Mathf.Abs(car.speed) < 0.05f) SetOverlay(Overlay.Map);
+                        else hud.Toast("マップは止まっているときに開けます", new Color(1f, 0.8f, 0.3f));
+                    }
+                    else if (arrival != null && (Mathf.Abs(car.speed) > 0.05f || Controls.Confirm)) arrival = null;
+                    break;
+                case Overlay.Menu:
+                    if (Controls.MenuToggle || Controls.Back) SetOverlay(Overlay.None);
+                    else MenuInput();
+                    break;
+                case Overlay.CarSelect:
+                    if (Controls.MenuToggle || Controls.Back) SetOverlay(Overlay.Menu);
+                    else CarSelectInput();
+                    break;
+                case Overlay.Help:
+                    if (Controls.MenuToggle || Controls.Back || Controls.Confirm) SetOverlay(Overlay.Menu);
+                    break;
+                case Overlay.Map:
+                    if (Controls.MapToggle || Controls.MenuToggle || Controls.Back) SetOverlay(Overlay.None);
+                    else MapInput();
+                    break;
             }
-            // N / Joy-Con(L) の − ボタン: マップ
-            else if (!menu && (Input.GetKeyDown(KeyCode.N) || Pad.Down(JoyButton.Minus))) OpenMap(!mapOpen);
-            else if (mapOpen && !menu) MapInput();
-            menu = hud && hud.menuOpen;
-            mapOpen = hud && hud.mapOpen;
-            if (!menu && !mapOpen)
+
+            car.creepEnabled = save.creep;
+            sensors.sound = save.sensorSound && overlay == Overlay.None;
+            clearance.show = save.clearance3D;
+            AudioListener.volume = save.volume;
+
+            if (destination != null && overlay == Overlay.None)
             {
-                if (Input.GetKeyDown(KeyCode.F5) || Input.GetKeyDown(KeyCode.Backspace)) Respawn();
-                if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
-                {
-                    if (showResult) showResult = false; else Judge(false);
-                }
-                // 判定結果はエンジンをかけるか、車が動き出したら自動で閉じる
-                if (showResult && (car.engineOn || Mathf.Abs(car.speed) > 0.05f)) showResult = false;
-                if (Input.GetKeyDown(KeyCode.G)) { showPath = !showPath; hud.Toast(showPath ? "予想進路線 ON" : "予想進路線 OFF", Color.white); }
-                if (Input.GetKeyDown(KeyCode.K)) { rig.backMonitor = !rig.backMonitor; hud.Toast(rig.backMonitor ? "バックモニター ON" : "バックモニター OFF", Color.white); }
-                if (Input.GetKeyDown(KeyCode.O)) { sensorSound = !sensorSound; hud.Toast(sensorSound ? "センサー音 ON" : "センサー音 OFF", Color.white); }
-                if (Input.GetKeyDown(KeyCode.L)) hud.showGuideInfo = !hud.showGuideInfo;
-                if (Input.GetKeyDown(KeyCode.H)) hud.helpOpen = !hud.helpOpen;
+                routeTimer -= Time.deltaTime;
+                if (routeTimer <= 0f) { routeTimer = 0.5f; UpdateRoute(); }
             }
-            if (path) path.show = showPath;
-            car.steerRate = steerRate;
-            car.creepEnabled = creep;
-            if (sensors) sensors.sound = sensorSound && !menu;
-            ApplyInputLock();
         }
 
-        public void ApplyInputLock()
+        void MenuInput()
         {
-            bool locked = hud && (hud.menuOpen || hud.mapOpen);
-            if (car) car.inputEnabled = !locked;
-            if (rig) rig.inputEnabled = !locked;
+            if (Controls.NavY != 0)
+            {
+                menuCursor = (menuCursor - Controls.NavY + menu.Count) % menu.Count;
+                resetArmed = false;
+            }
+            var item = menu[menuCursor];
+            if (Controls.NavX != 0) item.adjust?.Invoke(Controls.NavX);
+            if (Controls.Confirm) item.confirm?.Invoke();
         }
 
-        /// <summary>動作確認用: -autoshot &lt;dir&gt; で各スタート地点のスクリーンショットを保存して終了</summary>
+        void CarSelectInput()
+        {
+            if (Controls.NavX != 0) carCursor = Mathf.Clamp(carCursor + Controls.NavX, 0, CarSlots - 1);
+            if (!Controls.Confirm) return;
+            if (carCursor == 0)
+            {
+                save.carIndex = 0;
+                SetOverlay(Overlay.Menu);
+            }
+            else hud.Toast("この枠はまだ選べません", new Color(1f, 0.8f, 0.3f));
+        }
+
+        void MapInput()
+        {
+            int rows = mapPlaces.Count + 1; // 最後の行は「目的地を設定しない」
+            if (Controls.NavY != 0)
+            {
+                // 行けない場所は飛ばす
+                for (int k = 0; k < rows; k++)
+                {
+                    map.cursor = (map.cursor - Controls.NavY + rows) % rows;
+                    if (map.cursor >= mapPlaces.Count || !Locked(mapPlaces[map.cursor])) break;
+                }
+            }
+            if (!Controls.Confirm) return;
+            var p = map.cursor < mapPlaces.Count ? mapPlaces[map.cursor] : null;
+            SetDestination(p);
+            hud.Toast(p != null ? $"目的地: {p.name}" : "目的地を設定せずに走ります", new Color(1f, 0.7f, 0.3f), 3f);
+            SetOverlay(Overlay.None);
+        }
+
+        /// <summary>動作確認用: -autoshot &lt;dir&gt; で主な画面のスクリーンショットを保存して終了(記録は保存しない)</summary>
         IEnumerator AutoShot(string dir)
         {
             System.IO.Directory.CreateDirectory(dir);
             Application.runInBackground = true;
-            hud.SetMenu(false);
+            save = new SaveData { readOnly = true, volume = 0f };
             yield return null;
-            string Path(string name) => System.IO.Path.Combine(dir, name);
+            IEnumerator Shot(string name)
+            {
+                yield return new WaitForSecondsRealtime(0.6f);
+                ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(dir, name + ".png"));
+                yield return new WaitForSecondsRealtime(0.3f);
+            }
 
             // 全体図
             rig.SetMode(ViewMode.Top2D);
-            rig.fixedCenter = new Vector3(0, 0, 0);
-            float size = rig.orthoSize;
-            rig.orthoSize = 120f;
-            rig.Snap();
-            yield return new WaitForSecondsRealtime(0.6f);
-            ScreenCapture.CaptureScreenshot(Path("map_all.png"));
-            yield return new WaitForSecondsRealtime(0.4f);
-            foreach (var (name, center) in new[] { ("map_ne", new Vector3(80f, 0, 38f)), ("map_se", new Vector3(80f, 0, -38f)),
-                                                    ("map_nw", new Vector3(-38f, 0, 38f)), ("map_sw", new Vector3(-38f, 0, -38f)) })
-            {
-                rig.fixedCenter = center;
-                rig.orthoSize = 40f;
-                rig.Snap();
-                yield return new WaitForSecondsRealtime(0.6f);
-                ScreenCapture.CaptureScreenshot(Path(name + ".png"));
-                yield return new WaitForSecondsRealtime(0.4f);
-            }
             rig.fixedCenter = new Vector3(37f, 0, 0);
+            float size = rig.orthoSize;
             rig.orthoSize = 95f;
             rig.Snap();
-            yield return new WaitForSecondsRealtime(0.6f);
-            ScreenCapture.CaptureScreenshot(Path("map_town.png"));
-            yield return new WaitForSecondsRealtime(0.4f);
+            yield return Shot("town");
+            rig.fixedCenter = new Vector3(-30f, 0, -30f);
+            rig.orthoSize = 30f;
+            rig.Snap();
+            yield return Shot("home_shop1");
             rig.fixedCenter = null;
             rig.orthoSize = size;
 
-            for (int i = 0; i < world.starts.Count; i++)
+            // 自宅(3つの視点)
+            foreach (var m in new[] { ViewMode.Chase3D, ViewMode.Driver3D, ViewMode.Top2D })
             {
-                startIndex = i;
-                Respawn();
-                foreach (var m in new[] { ViewMode.Top2D, ViewMode.Driver3D })
+                rig.SetMode(m);
+                yield return Shot("home_" + m);
+            }
+            rig.SetMode(ViewMode.Chase3D);
+
+            // マップでコンビニを選ぶ
+            SetOverlay(Overlay.Map);
+            map.cursor = mapPlaces.FindIndex(p => p.id == "conveni");
+            SetDestination(mapPlaces[map.cursor]);
+            yield return Shot("map");
+            SetOverlay(Overlay.None);
+            yield return Shot("trip_chase");
+
+            // コンビニの空いている枠にバックで停めて P に入れる
+            var conv = world.PlaceById("conveni");
+            var spot = conv.spots.Find(s => s.destination);
+            car.Spawn(Kit.ParkedRearAxle(spot, true), spot.yaw);
+            car.travelled += 100f;
+            Physics.SyncTransforms();
+            rig.Snap();
+            car.TryShift(Gear.D);
+            car.TryShift(Gear.P);
+            yield return Shot("arrival");
+            arrival = null;
+
+            // バックカメラと距離表示
+            save.clearance3D = true;
+            car.TryShift(Gear.R);
+            yield return Shot("reverse_chase");
+            rig.SetMode(ViewMode.Driver3D);
+            yield return Shot("reverse_driver");
+            rig.SetMode(ViewMode.Chase3D);
+            save.clearance3D = false;
+
+            // カーナビ: 自宅からスーパーまでの経路に沿って車を動かし、案内の文を記録する
+            GoHome();
+            SetDestination(world.PlaceById("super"));
+            var path = new List<Vector3>(route);
+            float walked = 0f, shotAt = 60f;
+            for (int i = 1; i < path.Count; i++)
+            {
+                Vector3 a = path[i - 1], b = path[i];
+                float len = Vector3.Distance(a, b);
+                for (float t = 0f; t < len; t += 3f)
                 {
-                    rig.SetMode(m);
-                    yield return new WaitForSecondsRealtime(0.5f);
-                    ScreenCapture.CaptureScreenshot(Path($"start{i}_{m}.png"));
-                    yield return new WaitForSecondsRealtime(0.3f);
+                    Vector3 p = Vector3.Lerp(a, b, t / len);
+                    float yaw = Kit.YawOf(b - a);
+                    car.SetPose(p - CarSpec.Forward(yaw) * CarSpec.RearAxleToCenter, yaw);
+                    string say = StepGuide();
+                    var nx = guide.Next;
+                    if (say != null)
+                        Debug.Log($"[Nav] {walked:0}m 地点 ({p.x:0},{p.z:0}) 次={(nx.HasValue ? NavGuide.TurnWord(nx.Value.turn) + $" {nx.Value.along:0}m" : "なし")} 残り={routeLength:0}m: {say}");
+                    walked += 3f;
+                    if (walked >= shotAt && shotAt > 0f)
+                    {
+                        shotAt = -1f;
+                        Physics.SyncTransforms();
+                        rig.Snap();
+                        yield return Shot("nav");
+                    }
                 }
             }
-            startIndex = 0;
-            Respawn();
-            rig.SetMode(ViewMode.Chase3D);
-            yield return new WaitForSecondsRealtime(0.5f);
-            ScreenCapture.CaptureScreenshot(Path("home_chase.png"));
-            yield return new WaitForSecondsRealtime(0.3f);
-            car.SetEngine(true);
-            car.TryShift(Gear.R);
-            car.TryShift(Gear.P);
-            car.SetEngine(false);
-            rig.SetMode(ViewMode.Top2D);
-            yield return new WaitForSecondsRealtime(0.5f);
-            ScreenCapture.CaptureScreenshot(Path("home_judge.png"));
-            yield return new WaitForSecondsRealtime(0.3f);
-            showResult = false;
 
-            // マップと目的地
-            OpenMap(true);
-            map.cursor = map.destinations.FindIndex(s => s.name.StartsWith("コンビニ"));
-            yield return new WaitForSecondsRealtime(0.5f);
-            ScreenCapture.CaptureScreenshot(Path("map_select.png"));
-            yield return new WaitForSecondsRealtime(0.3f);
-            ConfirmMap();
-            rig.SetMode(ViewMode.Top2D);
-            rig.wide = true;
-            yield return new WaitForSecondsRealtime(0.5f);
-            ScreenCapture.CaptureScreenshot(Path("trip_top.png"));
-            yield return new WaitForSecondsRealtime(0.3f);
-            rig.wide = false;
-            var dest = destination;
-            car.Spawn(Kit.ParkedRearAxle(dest, true), dest.yaw);
-            Physics.SyncTransforms();
-            rig.SetMode(ViewMode.Chase3D);
-            car.SetEngine(true);
-            car.SetEngine(false);
-            yield return new WaitForSecondsRealtime(0.5f);
-            ScreenCapture.CaptureScreenshot(Path("trip_result.png"));
-            yield return new WaitForSecondsRealtime(0.3f);
-            showResult = false;
-
-            hud.SetMenu(true);
-            yield return new WaitForSecondsRealtime(0.5f);
-            ScreenCapture.CaptureScreenshot(Path("menu.png"));
-            yield return new WaitForSecondsRealtime(0.4f);
+            menuCursor = 0;
+            SetOverlay(Overlay.Menu);
+            yield return Shot("menu");
+            SetOverlay(Overlay.CarSelect);
+            yield return Shot("car_select");
+            SetOverlay(Overlay.Help);
+            yield return Shot("help");
+            SetOverlay(Overlay.None);
             Application.Quit();
         }
     }

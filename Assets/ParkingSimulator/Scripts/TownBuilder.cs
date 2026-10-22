@@ -75,7 +75,7 @@ namespace ParkingSim
             DefineLanes(w);
             // 区画や出入口を先に決めてから(縁石の切れ目・歩道の切れ目を登録)道路を作る
             Homes(t, w, rng);
-            MonthlyLot(t, w, rng);
+            ShopLot(t, w, rng);
             Store(t, w, rng);
             Supermarket(t, w, rng);
             ParallelBays(t, w, rng);
@@ -88,9 +88,8 @@ namespace ParkingSim
             Houses(t, rng);
             UtilityPoles(t);
 
-            w.starts.Add(new StartPoint { name = "S字の抜け道の入口", rearAxle = new Vector3(70f, 0, 6f), yaw = 0f });
-            w.starts.Add(new StartPoint { name = "クランク(南東)の入口", rearAxle = new Vector3(100f, 0, -66f), yaw = 0f });
-            w.starts.Add(new StartPoint { name = "クランク(北西)の入口", rearAxle = new Vector3(-66f, 0, 38f), yaw = 90f });
+            foreach (var sg in segs) w.navLines.Add(new List<Vector3> { sg.a.p, sg.b.p });
+            foreach (var l in lanes) w.navLines.Add(l.pts);
         }
 
         // ---------------------------------------------------------------- 幹線道路の網
@@ -375,6 +374,13 @@ namespace ParkingSim
 
         static void AddLane(string name, List<Vector3> pts, float width) => lanes.Add(new LanePath { name = name, pts = pts, width = width });
 
+        /// <summary>敷地の入口。道路の端(road)から敷地に入ったところ(inside)までを経路案内の行き先にする</summary>
+        static void Entrance(WorldResult w, Place p, Vector3 road, Vector3 inside)
+        {
+            p.entrances.Add(inside);
+            w.navLines.Add(new List<Vector3> { road, inside });
+        }
+
         /// <summary>
         /// 生活道路が幹線道路に出る所。edge は幹線道路の車道の端(生活道路の中心線上)、into は生活道路へ入る向き。
         /// 歩道を切り下げ、入口を片側 Flare ずつ広げた縁石で漏斗状にする
@@ -432,103 +438,111 @@ namespace ParkingSim
             }
         }
 
-        // ---------------------------------------------------------------- 自宅(戸建て・車庫)と近所の家(南西)
+        // ---------------------------------------------------------------- 自宅(戸建て・カーポート)と近所の家(南西)
         static void Homes(Transform t, WorldResult w, System.Random rng)
         {
             var g = new GameObject("Homes").transform;
             g.SetParent(t, false);
             Material block = Util.Mat(new Color(0.7f, 0.68f, 0.64f), 0.1f);
-            const float inner = 3.0f, depth = 6.0f;               // 車庫の内寸(中くらい)
+            Material post = Util.Mat(new Color(0.55f, 0.52f, 0.48f), 0.4f, 0.3f);
+            const float width = 2.5f, depth = 5.0f;                 // 駐車スペース(中)
             float laneEdge = HomeLaneX - LaneW / 2;                // 生活道路の西端
-            float xf = laneEdge - 1.3f, xb = xf - depth;           // 車庫の入口・奥(入口の前に 1.3m の土間)
+            float xf = laneEdge - 1.0f, xb = xf - depth;           // 枠の入口・奥(入口の前に 1m の土間)
             float[] gzs = { -12f, -26f, -40f, -54f };
             const int home = 1;
+            var homePlace = new Place
+            {
+                id = "home", name = "自宅", note = "カーポート(駐車スペース 中)", home = true,
+            };
             for (int i = 0; i < gzs.Length; i++)
             {
                 float gz = gzs[i];
-                var h = Util.Child(i == home ? "My Home" : "House With Garage", g, Vector3.zero).transform;
-                Kit.Surface(h, "Garage Floor", xb, gz - inner / 2, laneEdge, gz + inner / 2, Kit.Concrete);
-                Kit.Wall(h, new Vector3(xb, 0, gz + inner / 2 + 0.075f), new Vector3(xf, 0, gz + inner / 2 + 0.075f), 1.8f, 0.15f, block);
-                Kit.Wall(h, new Vector3(xb, 0, gz - inner / 2 - 0.075f), new Vector3(xf, 0, gz - inner / 2 - 0.075f), 1.8f, 0.15f, block);
-                Kit.Wall(h, new Vector3(xb - 0.075f, 0, gz - inner / 2 - 0.15f), new Vector3(xb - 0.075f, 0, gz + inner / 2 + 0.15f), 1.8f, 0.15f, block);
-                // 車庫の入口だけ生活道路の縁石を切る
-                clears.Add(new Clear { o = new Vector3(laneEdge - 0.125f, 0, gz), ax = Vector3.right, a0 = -0.5f, a1 = 0.5f, half = inner / 2 + 1.2f });
+                var h = Util.Child(i == home ? "My Home" : "House With Carport", g, Vector3.zero).transform;
+                Kit.Surface(h, "Carport Floor", xb - 0.3f, gz - width / 2 - 0.5f, laneEdge, gz + width / 2 + 0.5f, Kit.Concrete);
+                // 奥のブロック塀、家の側(南)に柱2本と梁(屋根は真上・外からの視点で車が隠れるので付けない)
+                Kit.Wall(h, new Vector3(xb - 0.375f, 0, gz - width / 2 - 0.5f), new Vector3(xb - 0.375f, 0, gz + width / 2 + 0.5f), 1.2f, 0.15f, block);
+                float px = gz - width / 2 - 0.35f;
+                foreach (float x in new[] { xb + 0.6f, xf - 0.4f })
+                    Util.Box("Carport Post", h, new Vector3(x, 1.1f, px), new Vector3(0.1f, 2.2f, 0.1f), post, null, true).layer = Layers.Obstacle;
+                Util.Box("Carport Beam", h, new Vector3((xb + 0.6f + xf - 0.4f) / 2, 2.25f, px), new Vector3(depth - 1.0f + 0.1f, 0.1f, 0.1f), post);
+                // 道路側の縁石は入口だけ切る
+                clears.Add(new Clear { o = new Vector3(laneEdge - 0.125f, 0, gz), ax = Vector3.right, a0 = -0.5f, a1 = 0.5f, half = width / 2 + 1.5f });
 
                 var spot = new TargetSpot
                 {
-                    name = i == home ? "自宅の車庫" : "お隣の車庫",
-                    center = new Vector3((xb + xf) / 2, 0, gz), yaw = 90f, width = inner, length = depth, lineWidth = 0f,
+                    name = i == home ? "自宅のカーポート" : "お隣のカーポート",
+                    center = new Vector3((xb + xf) / 2, 0, gz), yaw = 90f, width = width, length = depth, lineWidth = Kit.LineW,
                     aisleEnd = +1, bothWays = true, destination = i == home,
                 };
+                Kit.Line(h, spot.ToWorld(-width / 2, -depth / 2), spot.ToWorld(-width / 2, depth / 2));
+                Kit.Line(h, spot.ToWorld(width / 2, -depth / 2), spot.ToWorld(width / 2, depth / 2));
                 Kit.WheelStops(h, spot);
                 w.spots.Add(spot);
-                // 車庫の南隣に家(玄関は生活道路側)
-                House(h, new Vector3(-26.25f, 0, gz - inner / 2 - 0.45f - 4.5f), 90f, rng, 9f, false,
+                // カーポートの南隣に家(玄関は生活道路側)
+                House(h, new Vector3(-26.25f, 0, gz - width / 2 - 0.95f - 4.5f), 90f, rng, 9f, false,
                     i == home ? new Color(0.96f, 0.93f, 0.85f) : (Color?)null);
                 if (i == home)
                 {
-                    Kit.GuideOutline(h, spot);
-                    // 自宅の目印(車庫の奥の壁に青い札)
-                    Util.Box("My Garage Sign", h, new Vector3(xb + 0.02f, 1.2f, gz), new Vector3(0.05f, 0.35f, 0.6f), Util.Mat(new Color(0.1f, 0.35f, 0.85f), 0.4f));
-                    w.starts.Insert(0, new StartPoint { name = "自宅の車庫", rearAxle = Kit.ParkedRearAxle(spot, true), yaw = spot.yaw });
+                    homePlace.Add(new[] { spot });
+                    // 自宅の目印(奥の塀に青い札)
+                    Util.Box("My Home Sign", h, new Vector3(xb - 0.29f, 0.9f, gz), new Vector3(0.05f, 0.35f, 0.6f), Util.Mat(new Color(0.1f, 0.35f, 0.85f), 0.4f));
+                    w.homeRearAxle = Kit.ParkedRearAxle(spot, true);
+                    w.homeYaw = spot.yaw;
                 }
                 else
                 {
                     Kit.ParkedCar(h, new Vector3(spot.center.x - 0.3f, 0, gz), rng.NextDouble() < 0.7 ? 90f : 270f, CarKind.Random, rng, out _);
                 }
             }
+            w.places.Add(homePlace);
+            // 案内は生活道路からカーポートに入るところまで
+            Entrance(w, homePlace, new Vector3(HomeLaneX, 0, gzs[home]), new Vector3(laneEdge - 0.5f, 0, gzs[home]));
             blocked.Add(Rect.MinMaxRect(-31f, -66f, laneEdge, -Walk));
-            w.zones.Add(new Zone { name = "自宅(戸建て)", rect = Rect.MinMaxRect(-31f, -66f, laneEdge, -Walk) });
+            w.zones.Add(new Zone { name = "自宅", rect = Rect.MinMaxRect(-31f, -66f, laneEdge, -Walk) });
             w.zones.Add(new Zone { name = "自宅前の生活道路", rect = Rect.MinMaxRect(laneEdge, RingS + Walk, HomeLaneX + LaneW / 2 + 1f, -Walk), hideOnMap = true });
         }
 
-        // ---------------------------------------------------------------- 月極駐車場(南西。車間が狭い)
-        static void MonthlyLot(Transform t, WorldResult w, System.Random rng)
+        // ---------------------------------------------------------------- よく行くお店(南西。駐車スペースが狭い)
+        static void ShopLot(Transform t, WorldResult w, System.Random rng)
         {
-            var lot = new GameObject("Monthly Parking").transform;
+            var lot = new GameObject("Shop 1").transform;
             lot.SetParent(t, false);
             const float x0 = -49f, x1 = -31f, z0 = -40f, z1 = -Walk;
             Kit.Surface(lot, "Lot", x0, z0, x1, z1, Kit.Asphalt);
             Material block = Util.Mat(new Color(0.7f, 0.68f, 0.64f), 0.1f);
             Kit.Wall(lot, new Vector3(x0, 0, z0), new Vector3(x0, 0, z1), 1.0f, 0.15f, block);
             Kit.Wall(lot, new Vector3(x1, 0, z0), new Vector3(x1, 0, z1), 1.0f, 0.15f, block);
-            Kit.Wall(lot, new Vector3(x0, 0, z0), new Vector3(x1, 0, z0), 1.0f, 0.15f, block);
             Kit.Wall(lot, new Vector3(x0, 0, z1 - 0.1f), new Vector3(-44.2f, 0, z1 - 0.1f), 0.8f, 0.12f, block);
             Kit.Wall(lot, new Vector3(-35.8f, 0, z1 - 0.1f), new Vector3(x1, 0, z1 - 0.1f), 0.8f, 0.12f, block);
             mouths.Add(new Mouth { edge = new Vector3(-40f, 0, -HalfRoad), into = Vector3.back, half = 4f, fill = Kit.Concrete });
 
-            const int own = 5;
-            var west = Kit.SpotRow(lot, new Kit.RowSpec
-            {
-                name = "月極駐車場 西", origin = new Vector3(-43f, 0, -8.5f), along = Vector3.back, into = Vector3.left,
-                count = 11, width = 2.3f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.8f,
-                keepEmpty = own, fillNeighbors = true, kind = CarKind.Random,
-            }, rng);
-            var east = Kit.SpotRow(lot, new Kit.RowSpec
-            {
-                name = "月極駐車場 東", origin = new Vector3(-37f, 0, -8.5f), along = Vector3.back, into = Vector3.right,
-                count = 11, width = 2.3f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.75f,
-                keepEmpty = -1, kind = CarKind.Random,
-            }, rng);
+            // 店(駐車場の奥)
+            var shop = Util.BoxMinMax("Shop", lot, new Vector3(x0, 0, z0), new Vector3(x1, 4f, -34.5f), Util.Mat(new Color(0.86f, 0.8f, 0.7f), 0.2f), true);
+            shop.layer = Layers.Obstacle;
+            Util.BoxMinMax("Shop Glass", lot, new Vector3(-44f, 0.2f, -34.55f), new Vector3(-36f, 2.5f, -34.48f), Kit.Glass);
+            Util.BoxMinMax("Shop Awning", lot, new Vector3(-45f, 2.7f, -35.6f), new Vector3(-35f, 2.8f, -34.5f), Util.Mat(new Color(0.7f, 0.25f, 0.2f), 0.3f));
 
-            var mine = west[own];
-            mine.name = "月極の契約区画";
-            // 月極駐車場は他人の契約区画なので、目的地にできるのは自分が借りている区画だけ
-            foreach (var s in west) s.destination = false;
-            foreach (var s in east) s.destination = false;
-            mine.destination = true;
-            Kit.GuideOutline(lot, mine);
-            Vector3 sign = mine.ToWorld(0, -mine.length / 2 - 0.9f);
-            Util.Box("My Spot Sign", lot, new Vector3(sign.x, 0.75f, sign.z), new Vector3(0.05f, 0.35f, 0.6f), Util.Mat(new Color(0.1f, 0.35f, 0.85f), 0.4f));
-            w.spots.AddRange(west);
-            w.spots.AddRange(east);
+            Kit.RowSpec Row(string name, float ox, Vector3 into, int keep) => new Kit.RowSpec
+            {
+                name = name, origin = new Vector3(ox, 0, -8.5f), along = Vector3.back, into = into,
+                count = 10, width = 2.3f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.6f,
+                keepEmpty = keep, fillNeighbors = true, kind = CarKind.Random,
+            };
+            var place = new Place
+            {
+                id = "shop1", name = "よく行くお店", note = "駐車スペース 狭い(幅 2.3m)",
+            };
+            place.Add(Kit.SpotRow(lot, Row("よく行くお店 西", -43f, Vector3.left, 4), rng));
+            place.Add(Kit.SpotRow(lot, Row("よく行くお店 東", -37f, Vector3.right, 6), rng));
+            w.spots.AddRange(place.spots);
+            w.places.Add(place);
+            Entrance(w, place, new Vector3(-40f, 0, -HalfRoad), new Vector3(-40f, 0, -Walk - 0.75f));
 
-            w.starts.Add(new StartPoint { name = "月極駐車場", rearAxle = new Vector3(-40f, 0, -24f), yaw = 0f });
-            w.zones.Add(new Zone { name = "月極駐車場", rect = Rect.MinMaxRect(x0, z0, x1, z1) });
+            w.zones.Add(new Zone { name = "よく行くお店", rect = Rect.MinMaxRect(x0, z0, x1, z1) });
             blocked.Add(Rect.MinMaxRect(x0 - 0.5f, z0 - 0.5f, x1, z1));
         }
 
-        // ---------------------------------------------------------------- コンビニ(南東。車間が広い)
+        // ---------------------------------------------------------------- 近所のコンビニ(南東。駐車スペースが広い)
         static void Store(Transform t, WorldResult w, System.Random rng)
         {
             var st = new GameObject("Convenience Store").transform;
@@ -551,17 +565,24 @@ namespace ParkingSim
             var row = Kit.SpotRow(st, new Kit.RowSpec
             {
                 name = "コンビニ駐車場", origin = new Vector3(14.6f, 0, -19f), along = Vector3.right, into = Vector3.back,
-                count = 10, width = 2.8f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.35f, keepEmpty = -1,
+                count = 9, width = 3.0f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.35f, keepEmpty = -1,
                 kind = CarKind.Random,
             }, rng);
+            var place = new Place
+            {
+                id = "conveni", name = "近所のコンビニ", note = "駐車スペース 広い(幅 3.0m)",
+            };
+            place.Add(row);
             w.spots.AddRange(row);
+            w.places.Add(place);
+            Entrance(w, place, new Vector3(20f, 0, -HalfRoad), new Vector3(20f, 0, -Walk - 0.75f));
+            Entrance(w, place, new Vector3(38f, 0, -HalfRoad), new Vector3(38f, 0, -Walk - 0.75f));
             Kit.Raised(st, "Grass", Walk, z0, x0 - 0.25f, z1, Kit.Grass);
-            w.starts.Add(new StartPoint { name = "コンビニ駐車場", rearAxle = new Vector3(17f, 0, -12.5f), yaw = 90f });
-            w.zones.Add(new Zone { name = "コンビニ駐車場", rect = Rect.MinMaxRect(x0, z0, x1, z1) });
+            w.zones.Add(new Zone { name = "近所のコンビニ", rect = Rect.MinMaxRect(x0, z0, x1, z1) });
             blocked.Add(Rect.MinMaxRect(Walk, z0 - 0.5f, x1 + 0.5f, z1));
         }
 
-        // ---------------------------------------------------------------- スーパー(北東。車間が広い)
+        // ---------------------------------------------------------------- ちょっと遠くのスーパー(北東。駐車スペースは中くらい)
         static void Supermarket(Transform t, WorldResult w, System.Random rng)
         {
             var st = new GameObject("Supermarket").transform;
@@ -583,15 +604,21 @@ namespace ParkingSim
             Kit.RowSpec Row(string name, float ox, float oz, Vector3 into, int count) => new Kit.RowSpec
             {
                 name = name, origin = new Vector3(ox, 0, oz), along = Vector3.right, into = into, count = count,
-                width = 2.8f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.45f, keepEmpty = -1, kind = CarKind.Random,
+                width = 2.5f, depth = 5f, uGap = 0f, wheelStops = true, occupancy = 0.45f, keepEmpty = -1, kind = CarKind.Random,
             };
-            w.spots.AddRange(Kit.SpotRow(st, Row("スーパー駐車場 A列", 99f, 44.5f, Vector3.forward, 14), rng));
-            w.spots.AddRange(Kit.SpotRow(st, Row("スーパー駐車場 B列", 102f, 37.5f, Vector3.back, 13), rng));
-            w.spots.AddRange(Kit.SpotRow(st, Row("スーパー駐車場 C列", 102f, 27.5f, Vector3.forward, 13), rng));
-            w.spots.AddRange(Kit.SpotRow(st, Row("スーパー駐車場 D列", 102f, 20.5f, Vector3.back, 13), rng));
-
-            w.starts.Add(new StartPoint { name = "スーパー駐車場", rearAxle = new Vector3(100f, 0, 11f), yaw = 90f });
-            w.zones.Add(new Zone { name = "スーパー駐車場", rect = Rect.MinMaxRect(x0, z0, x1, 63f) });
+            var place = new Place
+            {
+                id = "super", name = "ちょっと遠くのスーパー", note = "駐車スペース 中(幅 2.5m)",
+            };
+            place.Add(Kit.SpotRow(st, Row("スーパー A列", 99f, 44.5f, Vector3.forward, 15), rng));
+            place.Add(Kit.SpotRow(st, Row("スーパー B列", 102f, 37.5f, Vector3.back, 14), rng));
+            place.Add(Kit.SpotRow(st, Row("スーパー C列", 102f, 27.5f, Vector3.forward, 14), rng));
+            place.Add(Kit.SpotRow(st, Row("スーパー D列", 102f, 20.5f, Vector3.back, 14), rng));
+            w.spots.AddRange(place.spots);
+            w.places.Add(place);
+            Entrance(w, place, new Vector3(110f, 0, HalfRoad), new Vector3(110f, 0, Walk + 0.75f));
+            Entrance(w, place, new Vector3(132f, 0, HalfRoad), new Vector3(132f, 0, Walk + 0.75f));
+            w.zones.Add(new Zone { name = "ちょっと遠くのスーパー", rect = Rect.MinMaxRect(x0, z0, x1, 63f) });
             blocked.Add(Rect.MinMaxRect(x0 - 0.5f, z0, x1, 63.5f));
         }
 
@@ -628,7 +655,6 @@ namespace ParkingSim
                 if (occupied) Kit.ParkedCar(g, spot.center + Vector3.forward * 0.1f, 90f, CarKind.Random, rng, out _);
                 w.spots.Add(spot);
             }
-            w.starts.Add(new StartPoint { name = "縦列駐車帯", rearAxle = new Vector3(9f, 0, laneZ), yaw = 90f });
             w.zones.Add(new Zone { name = "縦列駐車帯", rect = Rect.MinMaxRect(bx0 - taper, laneZ - 2f, bx1 + taper, zBack) });
             w.zones.Add(new Zone { name = "北の生活道路", rect = Rect.MinMaxRect(Walk, laneZ - 3f, 88f, laneZ + 3f), hideOnMap = true });
             blocked.Add(Rect.MinMaxRect(bx0 - taper, zEdge, bx1 + taper, zBack + 1f));

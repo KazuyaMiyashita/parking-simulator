@@ -3,14 +3,19 @@ using UnityEngine;
 namespace ParkingSim
 {
     /// <summary>
-    /// SUBARU インプレッサ SPORT (GT2 / F54C, FF, CVT) の寸法。単位は m。
-    /// 全長・全幅・最小回転半径はユーザー指定値、それ以外はカタログ値相当の想定値。
+    /// SUBARU インプレッサ SPORT(3BA-GT2 / F54C, FF, CVT, 2021年12月以降の E 型)の諸元。単位は m。
+    /// 全長・全幅・全高・ホイールベース・トレッド・最小回転半径・タイヤはカタログ値。
+    /// オーバーハングの前後配分・ステアリングギア比・ミラー幅は公表値が見つからないための想定値。
     /// </summary>
     public static class CarSpec
     {
         public const string DisplayName = "SUBARU IMPREZA SPORT";
-        public const string ModelCode = "GT2F54C (FF / CVT)";
+        public const string ModelCode = "3BA-GT2 (F54C)";
         public const string ColorName = "クリスタルホワイト・パール";
+        public const string Engine = "FB16 水平対向4気筒 1,599cc  115PS / 6,200rpm  148N·m / 3,600rpm";
+        public const string Drivetrain = "FF / リニアトロニック(CVT)";
+        public const string Tire = "205/55R16(17インチ車は 205/50R17)";
+        public const int WeightKg = 1300;
         public static readonly Color BodyColor = new Color(0.93f, 0.93f, 0.915f);
 
         public const float Length = 4.475f;           // 全長
@@ -19,13 +24,13 @@ namespace ParkingSim
         public const float Wheelbase = 2.670f;        // ホイールベース
         public const float TrackFront = 1.540f;       // トレッド 前
         public const float TrackRear = 1.545f;        // トレッド 後
-        public const float FrontOverhang = 1.005f;    // フロントオーバーハング
+        public const float FrontOverhang = 1.005f;    // フロントオーバーハング(想定)
         public const float RearOverhang = Length - Wheelbase - FrontOverhang; // 0.800
         public const float MinTurningRadius = 5.3f;   // 最小回転半径(外側前輪中心の軌跡)
         public const float TireRadius = 0.316f;       // 205/55R16 想定
         public const float TireWidth = 0.205f;
-        public const float SteeringRatio = 13.0f;     // ステアリングギア比
-        public const float MirrorHalfWidth = 1.01f;   // ミラーを含む半幅
+        public const float SteeringRatio = 13.0f;     // ステアリングギア比(想定)
+        public const float MirrorHalfWidth = 1.01f;   // ミラーを含む半幅(想定)
         public const float BodyBottom = 0.25f;        // 当たり判定に使うボディ下端(輪止めの上を通過できる高さ)
 
         public const float HalfLength = Length * 0.5f;
