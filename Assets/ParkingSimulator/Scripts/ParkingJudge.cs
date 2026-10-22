@@ -5,6 +5,8 @@ namespace ParkingSim
 {
     public class JudgeResult
     {
+        public string spotName = "";
+        public TargetSpot spot;               // 判定に使った区画(逆向き駐車なら反転済み)
         public bool nearTarget;
         public bool inside;
         public float leftMargin, rightMargin; // 車の左右から白線内側までの余白(負=線にかかっている)
@@ -12,7 +14,7 @@ namespace ParkingSim
         public float protrusion;              // 通路側/前後へのはみ出し量(正=はみ出し)
         public float curbDist = float.NaN;    // 縦列: 縁石までの距離
         public float centerOffset;            // 区画中心からの左右ずれ(正=右寄り)
-        public int collisions, switches;
+        public int collisions, switches, curbHits;
         public float time;
         public int score;
         public string rank = "-";
@@ -23,9 +25,23 @@ namespace ParkingSim
     {
         static readonly Vector3[] c4 = new Vector3[4];
 
+        /// <summary>この区画に入ってくる前の記録(接触・切り返しなどはここからの差分で数える)</summary>
+        public struct Baseline
+        {
+            public int collisions, switches, curbHits;
+            public float time;
+
+            public static Baseline Of(CarController c) => new Baseline
+            {
+                collisions = c.collisions, switches = c.directionChanges, curbHits = c.curbHits, time = c.driveTime,
+            };
+        }
+
         public static JudgeResult Measure(TargetSpot s, CarController car)
         {
-            var r = new JudgeResult();
+            var r = new JudgeResult { spotName = s.name };
+            if (s.bothWays && Mathf.Abs(Mathf.DeltaAngle(s.yaw, car.yaw)) > 90f) s = s.Flipped();
+            r.spot = s;
             CarSpec.Corners(car.Center, car.yaw, c4);
             float minU = float.MaxValue, maxU = float.MinValue, minW = float.MaxValue, maxW = float.MinValue;
             foreach (var p in c4)
@@ -52,19 +68,21 @@ namespace ParkingSim
             return r;
         }
 
-        public static JudgeResult Evaluate(TargetSpot s, CarController car)
+        public static JudgeResult Evaluate(TargetSpot s, CarController car, Baseline b)
         {
             var r = Measure(s, car);
-            r.collisions = car.collisions;
-            r.switches = car.directionChanges;
-            r.time = car.driveTime;
+            s = r.spot;
+            r.collisions = car.collisions - b.collisions;
+            r.switches = Mathf.Max(0, car.directionChanges - b.switches);
+            r.curbHits = car.curbHits - b.curbHits;
+            r.time = car.driveTime - b.time;
 
             if (!r.nearTarget)
             {
                 r.score = 0; r.rank = "-";
                 r.notes.Add(Mathf.Abs(r.angleErr) >= 45f && Mathf.Abs(r.angleErr) < 135f
                     ? "目標区画に対して向きが大きくずれています"
-                    : Mathf.Abs(r.angleErr) >= 135f ? "車の向きが逆です(駐車方法の設定を確認)" : "目標区画に入っていません");
+                    : Mathf.Abs(r.angleErr) >= 135f ? "車の向きが逆です(縦列駐車は進行方向に向けて停めます)" : "目標区画に入っていません");
                 return r;
             }
 
@@ -111,6 +129,11 @@ namespace ParkingSim
             {
                 score -= 25f * r.collisions;
                 r.notes.Add($"接触 {r.collisions} 回");
+            }
+            if (r.curbHits > 0)
+            {
+                score -= 5f * r.curbHits;
+                r.notes.Add($"縁石にタイヤが当たった(脱輪) {r.curbHits} 回");
             }
 
             int free = s.parallel ? 2 : 1;

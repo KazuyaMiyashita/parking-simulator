@@ -12,8 +12,7 @@ namespace ParkingSim
         public bool showGuideInfo = true;
         public bool showMirrorsHud = true;
 
-        ScenarioConfig edit;
-        int presetSel;
+        int startSel;
         Vector2 scroll;
         float vw, vh = 1080f;
 
@@ -26,14 +25,6 @@ namespace ParkingSim
         struct ToastMsg { public string text; public Color color; public float until; }
         readonly List<ToastMsg> toasts = new List<ToastMsg>();
 
-        static readonly string[] TypeNames = { "バック駐車", "前向き駐車", "縦列駐車" };
-        static readonly string[] LineNames = { "U字(ダブル/車間広め)", "I字(シングル/車間細め)" };
-        static readonly string[] BiasNames = { "中央", "自車側に寄せ", "ランダム" };
-        static readonly string[] OppNames = { "駐車車両", "壁", "なし" };
-        static readonly string[] PillarNames = { "なし", "左", "右", "両側" };
-        static readonly string[] ApproachNames = { "区画を左手に見て進入", "区画を右手に見て進入" };
-        static readonly string[] KindNames = { "ランダム", "軽", "コンパクト", "セダン", "ミニバン", "SUV", "大型ミニバン" };
-
         public void Toast(string text, Color c, float dur = 2.5f)
         {
             toasts.RemoveAll(t => t.text == text);
@@ -44,11 +35,7 @@ namespace ParkingSim
         public void SetMenu(bool open)
         {
             menuOpen = open;
-            if (open && gm)
-            {
-                edit = gm.config.Clone();
-                presetSel = System.Array.IndexOf(ScenarioConfig.PresetNames, edit.name);
-            }
+            if (open && gm) startSel = gm.startIndex;
             if (gm) gm.ApplyInputLock();
             // メニュー表示中はゲームの時間と音を完全に止める
             Time.timeScale = open ? 0f : 1f;
@@ -146,34 +133,35 @@ namespace ParkingSim
             DrawInstruments();
             if (gm.showSensors) DrawSensors();
             DrawToasts();
-            if (helpOpen) DrawHelp();
-            if (gm.showResult && gm.lastResult != null && !menuOpen) DrawResult();
+            if (gm.showResult && gm.lastResult != null && !menuOpen && !helpOpen) DrawResult();
+            if (helpOpen && !menuOpen) DrawHelp();
             if (menuOpen) DrawMenu();
         }
 
         void DrawTopInfo()
         {
             var car = gm.car;
-            string mode = gm.rig.mode == ViewMode.Top2D ? "2D 俯瞰" + (gm.rig.follow ? "(追従)" : "(固定)")
+            string mode = gm.rig.mode == ViewMode.Top2D ? "2D 俯瞰" + (gm.rig.wide ? "(広域)" : "")
                         : gm.rig.mode == ViewMode.Driver3D ? "3D 運転席" : "3D 外から";
-            float h = 104f;
+            float h = 130f;
             JudgeResult live = null;
             if (showGuideInfo)
             {
-                live = ParkingJudge.Measure(gm.lot.target, car);
-                if (live.nearTarget) h += gm.lot.target.parallel ? 84f : 58f;
+                live = gm.nearSpot != null ? ParkingJudge.Measure(gm.nearSpot, car) : null;
+                if (live != null && live.nearTarget) h += live.spot.parallel ? 84f : 58f;
                 else live = null;
             }
             GUILayout.BeginArea(new Rect(16, 16, 620, h), panel);
             GUILayout.Label($"{CarSpec.DisplayName} 駐車シミュレーター", title);
-            GUILayout.Label($"視点: {mode}   <color=#9ad>V:視点切替  H:操作説明  Esc:設定  F5:やり直し</color>", small);
-            GUILayout.Label(gm.config.Describe(), small);
+            GUILayout.Label($"視点: {mode}   <color=#9ad>V:視点切替  H:操作説明  Esc:設定  F5:スタート地点へ戻る</color>", small);
+            GUILayout.Label($"現在地: <b>{gm.world.ZoneName(car.Center)}</b>" + (gm.nearSpot != null ? $"   <color=#9df>{gm.nearSpot.name}</color>" : ""), small);
+            GUILayout.Label(Pad.Status() + (Pad.Connected ? "   <color=#9ad>−: 操作説明</color>" : "   <color=#888>(未接続)</color>"), small);
             if (live != null)
             {
                 string M(float v) => v >= 0 ? $"{v * 100:0}cm" : $"<color=#f66>{v * 100:0}cm</color>";
                 string a = Mathf.Abs(live.angleErr) < 1.5f ? $"{live.angleErr:+0.0;-0.0;0.0}°" : $"<color=#fc6>{live.angleErr:+0.0;-0.0}°</color>";
                 GUILayout.Label($"<b>位置ガイド</b>  左余白 {M(live.leftMargin)}   右余白 {M(live.rightMargin)}   角度 {a}", label);
-                if (gm.lot.target.parallel)
+                if (live.spot.parallel)
                     GUILayout.Label($"縁石まで {live.curbDist * 100:0}cm   枠はみ出し {(live.protrusion > 0 ? $"<color=#f66>{live.protrusion * 100:0}cm</color>" : "なし")}", label);
                 else if (live.protrusion > 0)
                     GUILayout.Label($"<color=#f66>通路側にはみ出し {live.protrusion * 100:0}cm</color>", small);
@@ -205,7 +193,7 @@ namespace ParkingSim
                 GUI.Label(gr, g[i], st);
             }
             if (car.parkingBrake)
-                GUI.Label(new Rect(r.x + 206, r.y + 90, 80, 30), "<color=#f44><b>(P) EPB</b></color>", label);
+                GUI.Label(new Rect(r.x + 200, r.y + 84, 100, 30), "<color=#f44><b>(P)</b></color>", label);
 
             // ペダル
             Bar(new Rect(r.x + 16, r.y + 154, 200, 14), car.throttle, new Color(0.3f, 0.9f, 0.4f), "アクセル");
@@ -224,7 +212,7 @@ namespace ParkingSim
             GUILayout.Label($"{(full ? "<color=#fc6>フルロック</color>" : $"{Mathf.Abs(car.wheelDeg):0}°")}", small);
             GUILayout.Label($"タイヤ {car.SteerDeg:+0.0;-0.0;0.0}°", small);
             GUILayout.Label(float.IsInfinity(radius) ? "回転半径 ∞" : $"回転半径 {radius:0.00}m", small);
-            GUILayout.Label($"接触 {car.collisions} / 切返し {car.directionChanges}", small);
+            GUILayout.Label($"接触{car.collisions} 脱輪{car.curbHits} 切返{car.directionChanges}", small);
             GUILayout.Label($"{(car.mouseSteer ? "<color=#9df>マウス操舵</color>" : "")}", small);
             GUILayout.EndArea();
         }
@@ -417,9 +405,10 @@ namespace ParkingSim
 
         void DrawHelp()
         {
-            var r = new Rect(vw / 2 - 380, 150, 760, 700);
+            var r = new Rect(vw / 2 - 420, 60, 840, 620);
             GUILayout.BeginArea(r, solid);
             GUILayout.Label("操作説明", title);
+            GUILayout.Label("<color=#fd6><b>キーボード</b></color>", label);
             string[] lines =
             {
                 "<b>W / ↑</b>  アクセル(押している間だけ踏み込みが増える)",
@@ -428,19 +417,23 @@ namespace ParkingSim
                 "<b>M</b>  マウスハンドル(画面上のマウスの左右位置がハンドル角)",
                 "<b>1 / 2 / 3 / 4</b>  シフト P / R / N / D    <b>Q / E</b>  シフトを1段上/下",
                 "<b>B</b>  電動パーキングブレーキ(アクセルで自動解除)",
-                "",
                 "<b>V / Tab</b>  視点切替(2D 俯瞰 → 3D 運転席 → 3D 外から)",
-                "2D: <b>ホイール / + -</b> ズーム, <b>F</b> 追従/固定",
+                "2D: <b>ホイール / + -</b> ズーム, <b>F</b> 広域表示",
                 "3D運転席: <b>右ドラッグ</b> 見回す, <b>Z</b> 左を見る, <b>X</b> 右を見る, <b>Z+X</b> 振り返る, <b>ホイール</b> 視野角",
-                "",
                 "<b>G</b> 予想進路線   <b>K</b> バックモニター   <b>O</b> センサー音   <b>L</b> 位置ガイド",
-                "<b>Enter</b>  駐車判定(P に入れても自動判定)   <b>F5 / Backspace</b>  やり直し",
+                "<b>Enter</b>  近くの駐車枠で判定(P に入れても自動判定)   <b>F5 / Backspace</b>  スタート地点へ戻る",
                 "<b>Esc / F1</b>  設定メニュー   <b>H</b>  この画面を閉じる",
-                "",
+                "<color=#fd6><b>Joy-Con (L)+(R) / ゲームパッド</b></color>",
+                "<b>Lスティック</b>  ハンドル(倒した量で回す速さ)   <b>Lスティック押し / 十字↓</b>  中立に戻す",
+                "<b>ZR</b> アクセル   <b>ZL</b> ブレーキ   <b>L</b> 強くブレーキ   <b>R</b> パーキングブレーキ",
+                "<b>X / B / Y / A</b>  シフト P / R / N / D",
+                "<b>十字↑</b> 視点切替   <b>十字← →</b> 左右を見る   <b>右スティック</b> 見回す(2D はズーム)",
+                "<b>Rスティック押し</b> 判定   <b>キャプチャー</b> スタート地点へ戻る   <b>+</b> 設定   <b>−</b> この画面",
+                "設定メニュー: <b>十字</b> スタート地点を選ぶ, <b>A</b> スタート, <b>B / +</b> 閉じる",
                 "<color=#9ad>D/R に入れてブレーキを離すとクリープで動き出します。</color>",
                 "<color=#9ad>最小回転半径 5.3m(ハンドルいっぱいで外側前輪がえがく円の半径)を再現しています。</color>",
             };
-            foreach (var l in lines) GUILayout.Label(l, l.StartsWith("<color") ? small : label);
+            foreach (var l in lines) GUILayout.Label(l, l.StartsWith("<color=#9ad") ? small : label);
             GUILayout.EndArea();
         }
 
@@ -449,7 +442,7 @@ namespace ParkingSim
             var res = gm.lastResult;
             var r = new Rect(vw / 2 - 330, 170, 660, 560);
             GUILayout.BeginArea(r, solid);
-            GUILayout.Label("駐車判定", title);
+            GUILayout.Label($"駐車判定  <size=18>{res.spotName}</size>", title);
             GUILayout.BeginHorizontal();
             var rankCol = res.rank == "S" ? "#ffd84a" : res.rank == "A" ? "#7df" : res.rank == "B" ? "#9e9" : res.rank == "-" ? "#aaa" : "#f99";
             GUILayout.Label($"<color={rankCol}>{res.rank}</color>", huge, GUILayout.Width(150), GUILayout.Height(100));
@@ -462,19 +455,19 @@ namespace ParkingSim
 
             if (res.nearTarget)
             {
-                var s = gm.lot.target;
+                var s = res.spot;
                 GUILayout.Label($"左余白 {res.leftMargin * 100:0} cm   右余白 {res.rightMargin * 100:0} cm   (白線内側まで)", label);
                 GUILayout.Label($"角度のずれ {res.angleErr:+0.0;-0.0;0.0}°   " +
                                 (s.parallel ? $"縁石まで {res.curbDist * 100:0} cm" : $"通路側 {(res.protrusion > 0 ? $"{res.protrusion * 100:0}cm はみ出し" : $"{-res.protrusion * 100:0}cm 内側")}"), label);
             }
-            GUILayout.Label($"接触 {res.collisions} 回   切り返し {res.switches} 回   時間 {res.time:0.0} 秒", label);
+            GUILayout.Label($"接触 {res.collisions} 回   脱輪 {res.curbHits} 回   切り返し {res.switches} 回   時間 {res.time:0.0} 秒", label);
             GUILayout.Space(6);
             foreach (var n in res.notes) GUILayout.Label("・" + n, label);
             GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("続ける (Enter)", GUILayout.Height(44))) gm.showResult = false;
-            if (GUILayout.Button("やり直し (F5)", GUILayout.Height(44))) gm.Build();
-            if (GUILayout.Button("設定", GUILayout.Height(44))) { gm.showResult = false; SetMenu(true); }
+            if (GUILayout.Button("続ける (Enter / A)", GUILayout.Height(44))) gm.showResult = false;
+            if (GUILayout.Button("やり直し (F5 / Y)", GUILayout.Height(44))) gm.Respawn();
+            if (GUILayout.Button("設定 (+)", GUILayout.Height(44))) { gm.showResult = false; SetMenu(true); }
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
@@ -482,63 +475,21 @@ namespace ParkingSim
         // ---------------------------------------------------------------- 設定メニュー
         void DrawMenu()
         {
-            if (edit == null) SetMenu(true);
-            var r = new Rect(vw / 2 - 560, 40, 1120, 1000);
+            var starts = gm.world.starts;
+            var names = new string[starts.Count];
+            for (int i = 0; i < names.Length; i++) names[i] = starts[i].name;
+            var r = new Rect(vw / 2 - 560, 60, 1120, 900);
             GUI.DrawTexture(new Rect(0, 0, vw, vh), panelTex);
             GUILayout.BeginArea(r, solid);
             GUILayout.Label("駐車シミュレーター 設定", title);
             GUILayout.Label($"自車: {CarSpec.DisplayName}  {CarSpec.ModelCode}  {CarSpec.ColorName}   " +
                             $"全長 {CarSpec.Length * 1000:#,0}mm  全幅 {CarSpec.Width * 1000:#,0}mm  最小回転半径 {CarSpec.MinTurningRadius}m", small);
+            GUILayout.Label("<color=#9ad>時間が止まった町で、自分だけが運転の練習をできます。自宅の月極駐車場・公道の十字路・コンビニ・自動車教習所(S字/クランク/方向転換/縦列駐車)を自由に走れます。</color>", new GUIStyle(small) { wordWrap = true });
             scroll = GUILayout.BeginScrollView(scroll);
 
-            GUILayout.Label("プリセット", header);
-            int ps = GUILayout.SelectionGrid(presetSel, ScenarioConfig.PresetNames, 3, GUILayout.Height(120), GUILayout.Width(1050));
-            if (ps != presetSel) { presetSel = ps; edit = ScenarioConfig.Preset(ps); }
-
-            GUILayout.Space(6);
-            GUILayout.Label("駐車場のケース", header);
-            var before = JsonUtility.ToJson(edit);
-            edit.type = (ParkingType)Choice("駐車方法", (int)edit.type, TypeNames);
-            if (edit.type != ParkingType.Parallel)
-            {
-                edit.lineType = (LineType)Choice("白線の形", (int)edit.lineType, LineNames);
-                edit.spotWidth = Slider("区画幅(線の中心間)", edit.spotWidth, 2.0f, 3.5f, 0.05f, "m");
-                if (edit.lineType == LineType.U)
-                    edit.uGap = Slider("U字の2本線の間隔", edit.uGap, 0.3f, 1.2f, 0.05f, "m");
-                edit.spotDepth = Slider("区画の奥行", edit.spotDepth, 4.5f, 6.0f, 0.1f, "m");
-                edit.aisleWidth = Slider("前方スペース(通路幅)", edit.aisleWidth, 3.5f, 10f, 0.1f, "m");
-                edit.backSpace = Slider("区画後端から壁まで", edit.backSpace, 0f, 2f, 0.1f, "m");
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("", GUILayout.Width(250));
-                edit.wheelStops = GUILayout.Toggle(edit.wheelStops, " 輪止め", GUILayout.Width(150));
-                edit.leftNeighbor = GUILayout.Toggle(edit.leftNeighbor, " 左隣に車(通路から見て)", GUILayout.Width(300));
-                edit.rightNeighbor = GUILayout.Toggle(edit.rightNeighbor, " 右隣に車");
-                GUILayout.EndHorizontal();
-                edit.neighborBias = (NeighborBias)Choice("隣の車の停め位置", (int)edit.neighborBias, BiasNames);
-                edit.pillar = (PillarPos)Choice("柱(区画の通路側の角)", (int)edit.pillar, PillarNames);
-                edit.opposite = (OppositeSide)Choice("通路の向かい側", (int)edit.opposite, OppNames);
-                edit.approachFromLeft = Choice("スタート位置", edit.approachFromLeft ? 0 : 1, ApproachNames) == 0;
-                edit.otherOccupancy = Slider("他の区画の埋まり具合", edit.otherOccupancy, 0f, 1f, 0.1f, "");
-            }
-            else
-            {
-                edit.parallelGap = Slider("前後の車の間隔", edit.parallelGap, 5.0f, 10f, 0.1f, "m");
-                edit.parallelLaneWidth = Slider("停車帯の幅", edit.parallelLaneWidth, 2.0f, 3.0f, 0.05f, "m");
-                edit.aisleWidth = Slider("前方スペース(道路幅)", edit.aisleWidth, 2.8f, 10f, 0.1f, "m");
-                edit.opposite = (OppositeSide)Choice("道路の反対側", (int)edit.opposite, OppNames);
-            }
-            edit.neighborKind = (CarKind)Choice("隣の車の車種", (int)edit.neighborKind, KindNames);
-            GUILayout.BeginHorizontal();
-            GUILayout.Label($"配置パターン #{edit.seed}", GUILayout.Width(250));
-            if (GUILayout.Button("他の車を並べ直す", GUILayout.Width(220))) edit.seed++;
-            GUILayout.EndHorizontal();
-            if (JsonUtility.ToJson(edit) != before && presetSel >= 0)
-            {
-                // プリセットから変更したらカスタム扱い(並べ直しのみは除く)
-                var p = ScenarioConfig.Preset(presetSel); p.seed = edit.seed;
-                if (JsonUtility.ToJson(p) != JsonUtility.ToJson(edit)) { presetSel = -1; edit.name = "カスタム"; }
-            }
-
+            GUILayout.Label("スタート地点", header);
+            startSel = GUILayout.SelectionGrid(Mathf.Clamp(startSel, 0, names.Length - 1), names, 3, GUILayout.Height(40 * Mathf.CeilToInt(names.Length / 3f)), GUILayout.Width(1050));
+            GUILayout.Label("<color=#9ad>どの地点も P・パーキングブレーキ ON で停車した状態から始まります。F5 / キャプチャーボタンで選んだ地点に戻ります。</color>", small);
             GUILayout.Space(8);
             GUILayout.Label("補助機能", header);
             GUILayout.BeginHorizontal();
@@ -556,26 +507,34 @@ namespace ParkingSim
             gm.steerRate = Slider("キーでハンドルを回す速さ", gm.steerRate, 180f, 900f, 10f, "°/秒");
             GUILayout.EndScrollView();
 
+            GUILayout.Label("<color=#9ad>Joy-Con: 十字← → スタート地点 / A この地点からスタート / B・+ 閉じる</color>", small);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("<b>この設定でスタート</b>", new GUIStyle(GUI.skin.button) { richText = true, fontSize = 22 }, GUILayout.Height(54)))
-            {
-                gm.config = edit.Clone();
-                SetMenu(false);
-                gm.Build();
-            }
-            if (GUILayout.Button("閉じる (Esc)", GUILayout.Height(54), GUILayout.Width(200))) SetMenu(false);
+            if (GUILayout.Button("<b>この地点からスタート (A)</b>", new GUIStyle(GUI.skin.button) { richText = true, fontSize = 22 }, GUILayout.Height(54)))
+                StartFromSelection();
+            if (GUILayout.Button("閉じる (Esc / +)", GUILayout.Height(54), GUILayout.Width(220))) SetMenu(false);
             if (GUILayout.Button("終了", GUILayout.Height(54), GUILayout.Width(120))) Application.Quit();
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
 
-        int Choice(string name, int value, string[] options)
+        void StartFromSelection()
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(name, GUILayout.Width(250));
-            value = GUILayout.Toolbar(value, options, GUILayout.Height(34), GUILayout.Width(Mathf.Min(800f, options.Length * 200f)));
-            GUILayout.EndHorizontal();
-            return value;
+            gm.startIndex = startSel;
+            SetMenu(false);
+            gm.Respawn();
+        }
+
+        /// <summary>メニュー表示中の Joy-Con / ゲームパッド操作</summary>
+        public void PadMenuInput()
+        {
+            if (!menuOpen || !gm) return;
+            int n = gm.world.starts.Count;
+            if (Pad.Down(JoyButton.Right) || Pad.Down(JoyButton.Left))
+                startSel = (startSel + (Pad.Down(JoyButton.Right) ? 1 : -1) + n) % n;
+            if (Pad.Down(JoyButton.Down)) startSel = Mathf.Min(n - 1, startSel + 3);
+            if (Pad.Down(JoyButton.Up)) startSel = Mathf.Max(0, startSel - 3);
+            if (Pad.Down(JoyButton.A)) StartFromSelection();
+            else if (Pad.Down(JoyButton.B)) SetMenu(false);
         }
 
         float Slider(string name, float v, float min, float max, float step, string unit)

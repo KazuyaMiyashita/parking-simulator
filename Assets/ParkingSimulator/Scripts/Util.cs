@@ -13,6 +13,7 @@ namespace ParkingSim
         public const int WheelStop = 11;   // 輪止め・縁石(タイヤだけが当たる)
         public const int Guide = 12;       // 俯瞰視点用のガイド表示
         public const int OwnBody = 13;     // 自車ボディ外装
+        public const int Curb = 14;        // 縁石・歩道(タイヤが当たると脱輪扱い)
 
         public static int Mask(params int[] layers)
         {

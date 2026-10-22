@@ -2,6 +2,8 @@ using UnityEngine;
 
 namespace ParkingSim
 {
+    public enum CarKind { Random, Kei, Compact, Sedan, Minivan, SUV, LargeMinivan }
+
     /// <summary>自車の部品参照。RenderTexture の後始末も担当する。</summary>
     public class OwnCarParts : MonoBehaviour
     {

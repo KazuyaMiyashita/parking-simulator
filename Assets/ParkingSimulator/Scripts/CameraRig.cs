@@ -10,7 +10,9 @@ namespace ParkingSim
         public Camera cam;
         public ViewMode mode = ViewMode.Top2D;
         public float orthoSize = 9f;
-        public bool follow = true;
+        public bool wide;                 // 2D の広域表示
+        public const float WideSize = 60f;
+        public Vector3? fixedCenter;       // 指定すると 2D はその位置を中心に表示(スクリーンショット用)
         public float driverFov = 60f;
         public bool mirrorTiltInReverse = true;
         public bool backMonitor = true;
@@ -18,7 +20,6 @@ namespace ParkingSim
 
         CarController car;
         OwnCarParts parts;
-        LotResult lot;
         float lookYaw, lookPitch;
         Vector3 topPos, chasePos;
         float mirrorTilt;
@@ -37,9 +38,9 @@ namespace ParkingSim
             go.AddComponent<AudioListener>();
         }
 
-        public void Attach(CarController c, LotResult l)
+        public void Attach(CarController c)
         {
-            car = c; parts = c ? c.parts : null; lot = l;
+            car = c; parts = c ? c.parts : null;
             Snap();
         }
 
@@ -55,7 +56,7 @@ namespace ParkingSim
         public void Snap()
         {
             if (!car) return;
-            topPos = follow ? car.Center : lot.viewCenter;
+            topPos = fixedCenter ?? car.Center;
             chasePos = ChaseTarget();
             UpdateCamera(0f);
         }
@@ -68,12 +69,13 @@ namespace ParkingSim
 
         void HandleInput()
         {
-            if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.Tab)) Cycle();
+            if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.Tab) || Pad.Down(JoyButton.Up)) Cycle();
             float wheel = Input.mouseScrollDelta.y;
             if (mode == ViewMode.Top2D)
             {
                 if (wheel != 0) orthoSize = Mathf.Clamp(orthoSize * (1f - wheel * 0.1f), 3f, 40f);
-                if (Input.GetKeyDown(KeyCode.F)) { follow = !follow; }
+                if (Pad.RightStick.y != 0) orthoSize = Mathf.Clamp(orthoSize * (1f - Pad.RightStick.y * 1.5f * Time.deltaTime), 3f, 40f);
+                if (Input.GetKeyDown(KeyCode.F)) wide = !wide;
                 if (Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.KeypadPlus)) orthoSize = Mathf.Max(3f, orthoSize - 10f * Time.deltaTime);
                 if (Input.GetKey(KeyCode.Minus) || Input.GetKey(KeyCode.KeypadMinus)) orthoSize = Mathf.Min(40f, orthoSize + 10f * Time.deltaTime);
             }
@@ -99,11 +101,11 @@ namespace ParkingSim
                 case ViewMode.Top2D:
                 {
                     cam.orthographic = true;
-                    cam.orthographicSize = follow ? orthoSize : Mathf.Max(orthoSize, lot.viewSize);
-                    Vector3 target = follow ? car.Center : lot.viewCenter;
+                    cam.orthographicSize = wide ? WideSize : orthoSize;
+                    Vector3 target = fixedCenter ?? car.Center;
                     topPos = dt > 0 ? Vector3.Lerp(topPos, target, 1f - Mathf.Exp(-8f * dt)) : target;
                     cam.transform.SetPositionAndRotation(new Vector3(topPos.x, 60f, topPos.z), Quaternion.Euler(90f, 0f, 0f));
-                    cam.nearClipPlane = 1f; cam.farClipPlane = 100f;
+                    cam.nearClipPlane = 1f; cam.farClipPlane = 120f;
                     cam.cullingMask = ~0;
                     break;
                 }
@@ -111,15 +113,23 @@ namespace ParkingSim
                 {
                     cam.orthographic = false;
                     cam.fieldOfView = driverFov;
-                    cam.nearClipPlane = 0.04f; cam.farClipPlane = 400f;
+                    cam.nearClipPlane = 0.08f; cam.farClipPlane = 400f;
                     cam.cullingMask = ~Layers.Mask(Layers.OwnCabin, Layers.Guide);
 
                     float targetYaw = 0f, targetPitch = 0f;
-                    bool lookL = inputEnabled && Input.GetKey(KeyCode.Z), lookR = inputEnabled && Input.GetKey(KeyCode.X);
+                    bool lookL = inputEnabled && (Input.GetKey(KeyCode.Z) || Pad.Held(JoyButton.Left));
+                    bool lookR = inputEnabled && (Input.GetKey(KeyCode.X) || Pad.Held(JoyButton.Right));
+                    Vector2 rs = inputEnabled ? Pad.RightStick : Vector2.zero;
                     bool free = inputEnabled && Input.GetMouseButton(1);
                     if (lookL && lookR) targetYaw = -160f;      // 左肩越しに後方
                     else if (lookL) targetYaw = -75f;
                     else if (lookR) targetYaw = 75f;
+                    else if (rs != Vector2.zero)
+                    {
+                        // 右スティックを倒した方向を見る(後ろに倒すと左肩越しに振り返る)
+                        targetYaw = rs.y < -0.5f && Mathf.Abs(rs.x) < 0.5f ? -160f : rs.x * 110f;
+                        targetPitch = rs.y > 0 ? -rs.y * 25f : 0f;
+                    }
                     if (free)
                     {
                         lookYaw = Mathf.Clamp(lookYaw + Input.GetAxis("Mouse X") * 3f, -170f, 170f);
