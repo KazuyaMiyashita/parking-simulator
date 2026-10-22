@@ -30,6 +30,8 @@ namespace ParkingSim
         CarController car;
         AudioSource src, alarm;
         float beepTimer;
+        float alarmTime;              // 今回の接触で警告音を鳴らしている時間
+        const float AlarmMax = 3f;    // 接触中でも3秒で止める
         int mask;
 
         public void Init(CarController c)
@@ -86,7 +88,9 @@ namespace ParkingSim
             Measure();
             if (alarm)
             {
-                bool on = car && car.touchingBody;
+                bool touching = car && car.touchingBody;
+                alarmTime = touching ? alarmTime + Time.deltaTime : 0f;
+                bool on = touching && alarmTime < AlarmMax;
                 if (on && !alarm.isPlaying) alarm.Play();
                 else if (!on && alarm.isPlaying) alarm.Stop();
             }

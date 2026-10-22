@@ -15,6 +15,7 @@ namespace ParkingSim
         public bool showPath = true;
         public bool sensorSound = true;
         public bool showSensors = true;
+        public bool creep;
         public float steerRate = 450f;
 
         [System.NonSerialized] public int startIndex;
@@ -100,9 +101,13 @@ namespace ParkingSim
             car.Init(parts);
             car.notify = (msg, col) => { if (hud) hud.Toast(msg, col); };
             car.gearChanged = OnGearChanged;
+            car.engineChanged = OnEngineChanged;
 
             sensors = parts.gameObject.AddComponent<ParkingSensors>();
             sensors.Init(car);
+
+            // 警告音の AudioSource と分けるため子オブジェクトに付ける(OnAudioFilterRead は同じオブジェクトの音源に掛かる)
+            Util.Child("Car Audio", parts.transform, Vector3.zero).AddComponent<CarAudio>().Init(car);
 
             path = Util.Child("Path Guide", root.transform, Vector3.zero).AddComponent<PathGuide>();
             path.Init(car);
@@ -127,9 +132,13 @@ namespace ParkingSim
             ApplyInputLock();
         }
 
+        void OnEngineChanged(bool on)
+        {
+            if (!on) Judge(true); // エンジンを止めたら近くの駐車枠で自動判定
+        }
+
         void OnGearChanged(Gear g)
         {
-            if (g == Gear.P) Judge(true);
             if (hud) hud.Toast($"シフト: {g}", Color.white, 1.2f);
         }
 
@@ -173,8 +182,8 @@ namespace ParkingSim
                 {
                     if (showResult) showResult = false; else Judge(false);
                 }
-                // 判定結果はシフトを P から動かすか、車が動き出したら自動で閉じる
-                if (showResult && (car.gear != Gear.P || Mathf.Abs(car.speed) > 0.05f)) showResult = false;
+                // 判定結果はエンジンをかけるか、車が動き出したら自動で閉じる
+                if (showResult && (car.engineOn || Mathf.Abs(car.speed) > 0.05f)) showResult = false;
                 if (Input.GetKeyDown(KeyCode.G)) { showPath = !showPath; hud.Toast(showPath ? "予想進路線 ON" : "予想進路線 OFF", Color.white); }
                 if (Input.GetKeyDown(KeyCode.K)) { rig.backMonitor = !rig.backMonitor; hud.Toast(rig.backMonitor ? "バックモニター ON" : "バックモニター OFF", Color.white); }
                 if (Input.GetKeyDown(KeyCode.O)) { sensorSound = !sensorSound; hud.Toast(sensorSound ? "センサー音 ON" : "センサー音 OFF", Color.white); }
@@ -183,6 +192,7 @@ namespace ParkingSim
             }
             if (path) path.show = showPath;
             car.steerRate = steerRate;
+            car.creepEnabled = creep;
             if (sensors) sensors.sound = sensorSound && !menu;
             ApplyInputLock();
         }
@@ -239,8 +249,10 @@ namespace ParkingSim
             yield return new WaitForSecondsRealtime(0.5f);
             ScreenCapture.CaptureScreenshot(Path("home_chase.png"));
             yield return new WaitForSecondsRealtime(0.3f);
+            car.SetEngine(true);
             car.TryShift(Gear.R);
             car.TryShift(Gear.P);
+            car.SetEngine(false);
             rig.SetMode(ViewMode.Top2D);
             yield return new WaitForSecondsRealtime(0.5f);
             ScreenCapture.CaptureScreenshot(Path("home_judge.png"));

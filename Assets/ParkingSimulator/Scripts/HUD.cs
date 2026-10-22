@@ -132,6 +132,7 @@ namespace ParkingSim
             DrawTopInfo();
             DrawInstruments();
             if (gm.showSensors) DrawSensors();
+            if (!gm.car.engineOn && !menuOpen && !gm.showResult) DrawEngineOff();
             DrawToasts();
             if (gm.showResult && gm.lastResult != null && !menuOpen && !helpOpen) DrawResult();
             if (helpOpen && !menuOpen) DrawHelp();
@@ -153,7 +154,7 @@ namespace ParkingSim
             }
             GUILayout.BeginArea(new Rect(16, 16, 620, h), panel);
             GUILayout.Label($"{CarSpec.DisplayName} 駐車シミュレーター", title);
-            GUILayout.Label($"視点: {mode}   <color=#9ad>V:視点切替  H:操作説明  Esc:設定  F5:スタート地点へ戻る</color>", small);
+            GUILayout.Label($"視点: {mode}   <color=#9ad>V/ZR:視点切替  H:操作説明  Esc:設定  F5:スタート地点へ戻る</color>", small);
             GUILayout.Label($"現在地: <b>{gm.world.ZoneName(car.Center)}</b>" + (gm.nearSpot != null ? $"   <color=#9df>{gm.nearSpot.name}</color>" : ""), small);
             GUILayout.Label(Pad.Status() + (Pad.Connected ? "" : "   <color=#888>(未接続)</color>"), small);
             if (live != null)
@@ -194,6 +195,7 @@ namespace ParkingSim
             }
             if (car.parkingBrake)
                 GUI.Label(new Rect(r.x + 200, r.y + 84, 100, 30), "<color=#f44><b>(P)</b></color>", label);
+            GUI.Label(new Rect(r.x + 120, r.y + 48, 200, 26), car.engineOn ? "<color=#7f7>● エンジン ON</color>" : "<color=#888>○ エンジン OFF</color>", small);
 
             // ペダル
             Bar(new Rect(r.x + 16, r.y + 154, 200, 14), car.throttle, new Color(0.3f, 0.9f, 0.4f), "アクセル");
@@ -403,9 +405,17 @@ namespace ParkingSim
             }
         }
 
+        void DrawEngineOff()
+        {
+            var r = new Rect(vw / 2 - 400, vh / 2 + 120, 800, 86);
+            GUI.Box(r, GUIContent.none, solid);
+            GUI.Label(new Rect(r.x, r.y + 12, r.width, 34), "ブレーキ(ジョイコン左の▼)を踏みながらLを長押しすると、エンジンが始動します。", centerLabel);
+            GUI.Label(new Rect(r.x, r.y + 46, r.width, 26), "<color=#9ad>キーボード: S / ↓ を押しながら I を長押し</color>", new GUIStyle(small) { alignment = TextAnchor.MiddleCenter });
+        }
+
         void DrawHelp()
         {
-            var r = new Rect(vw / 2 - 420, 60, 840, 620);
+            var r = new Rect(vw / 2 - 420, 60, 840, 660);
             GUILayout.BeginArea(r, solid);
             GUILayout.Label("操作説明", title);
             GUILayout.Label("<color=#fd6><b>キーボード</b></color>", label);
@@ -417,21 +427,22 @@ namespace ParkingSim
                 "<b>M</b>  マウスハンドル(画面上のマウスの左右位置がハンドル角)",
                 "<b>1 / 2 / 3 / 4</b>  シフト P / R / N / D    <b>Q / E</b>  シフトを1段上/下",
                 "<b>B</b>  電動パーキングブレーキ(アクセルで自動解除)",
+                "<b>ブレーキ + I 長押し</b>  エンジン始動(停止中) / エンジン停止(P のとき)",
                 "<b>V / Tab</b>  視点切替(2D 俯瞰 → 3D 運転席 → 3D 外から)",
                 "2D: <b>ホイール / + -</b> ズーム, <b>F</b> 広域表示",
                 "3D運転席: <b>右ドラッグ</b> 見回す, <b>Z</b> 左を見る, <b>X</b> 右を見る, <b>Z+X</b> 振り返る, <b>ホイール</b> 視野角",
                 "<b>G</b> 予想進路線   <b>K</b> バックモニター   <b>O</b> センサー音   <b>L</b> 位置ガイド",
-                "<b>Enter</b>  近くの駐車枠で判定(P に入れても自動判定)   <b>F5 / Backspace</b>  スタート地点へ戻る",
+                "<b>Enter</b>  近くの駐車枠で判定(エンジンを止めても自動判定)   <b>F5 / Backspace</b>  スタート地点へ戻る",
                 "<b>Esc / F1</b>  設定メニュー   <b>H</b>  この画面を閉じる",
                 "<color=#fd6><b>Joy-Con (L)+(R) / ゲームパッド</b></color>",
-                "<b>右スティック 上 / 下</b>  アクセル / ブレーキ(倒した量で踏み込み、離してもそのまま)",
-                "<b>右スティック 左 / 右</b>  ハンドルを回す(倒した量で回す速さ)",
-                "<b>右スティック押し込み</b>  アクセル・ブレーキ・ハンドルをゆっくり元に戻す",
-                "<b>A / B</b>  アクセル / ブレーキ(押している間だけ)",
+                "<b>左の ▲ / ▼</b>  アクセル / ブレーキ(押している間だけ)",
+                "<b>右スティック 左 / 右</b>  ハンドルを回す(離すと中立に戻る)   <b>R を押している間</b>  ハンドルを保持",
                 "<b>L / ZL</b>  シフトを1段 D 側 / P 側へ(P → R → N → D)",
-                "<b>左スティック</b>  視線を動かす(2D はズーム)   <b>左スティック押し込み</b>  正面に戻す",
+                "<b>▼ + L 長押し</b>  エンジン始動(シフト P)   <b>▼ + ZL 長押し</b>  エンジン停止(P のとき)",
+                "<b>ZR</b>  視点切替",
+                "<b>左スティック</b>  運転席: 倒している間その方向を見る / 外から: 上下で仰角・左右で回り込み / 2D: ズーム",
                 "<b>キャプチャーボタン(左の丸いボタン)</b>  設定メニュー",
-                "<color=#9ad>D/R に入れてブレーキを離すとクリープで動き出します。</color>",
+                "<color=#9ad>設定メニューでクリープを ON にすると、D/R に入れてブレーキを離すだけで動き出します。</color>",
                 "<color=#9ad>最小回転半径 5.3m(ハンドルいっぱいで外側前輪がえがく円の半径)を再現しています。</color>",
             };
             foreach (var l in lines) GUILayout.Label(l, l.StartsWith("<color=#9ad") ? small : label);
@@ -490,7 +501,7 @@ namespace ParkingSim
 
             GUILayout.Label("スタート地点", header);
             startSel = GUILayout.SelectionGrid(Mathf.Clamp(startSel, 0, names.Length - 1), names, 3, GUILayout.Height(40 * Mathf.CeilToInt(names.Length / 3f)), GUILayout.Width(1050));
-            GUILayout.Label("<color=#9ad>どの地点も P・パーキングブレーキ ON で停車した状態から始まります。F5 で選んだ地点に戻ります。</color>", small);
+            GUILayout.Label("<color=#9ad>どの地点もエンジン停止・P・パーキングブレーキ ON で停車した状態から始まります。F5 で選んだ地点に戻ります。</color>", small);
             GUILayout.Space(8);
             GUILayout.Label("補助機能", header);
             GUILayout.BeginHorizontal();
@@ -503,6 +514,9 @@ namespace ParkingSim
             showGuideInfo = GUILayout.Toggle(showGuideInfo, " 位置ガイド (L)", GUILayout.Width(250));
             showMirrorsHud = GUILayout.Toggle(showMirrorsHud, " ミラーを画面に表示(3D)", GUILayout.Width(330));
             gm.rig.mirrorTiltInReverse = GUILayout.Toggle(gm.rig.mirrorTiltInReverse, " リバース連動ドアミラー");
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            gm.creep = GUILayout.Toggle(gm.creep, " クリープ現象(D/R でブレーキを離すとゆっくり進む)");
             GUILayout.EndHorizontal();
             gm.rig.driverFov = Slider("運転席の視野角(縦)", gm.rig.driverFov, 35f, 90f, 1f, "°");
             gm.steerRate = Slider("キーでハンドルを回す速さ", gm.steerRate, 180f, 900f, 10f, "°/秒");

@@ -300,7 +300,7 @@ namespace ParkingSim
             var h = Util.Child("House", p, pos, Quaternion.Euler(0, facing, 0)).transform;
             float wdt = 7.5f + (float)rng.NextDouble() * 2f, dep = 7f + (float)rng.NextDouble() * 2f, ht = 5.6f;
             var wall = Util.Mat(WallColors[rng.Next(WallColors.Length)], 0.1f);
-            Util.Box("Body", h, new Vector3(0, ht / 2, 0), new Vector3(wdt, ht, dep), wall);
+            Util.Box("Body", h, new Vector3(0, ht / 2, 0), new Vector3(wdt, ht, dep), wall, null, true).layer = Layers.Obstacle; // 外部視点のカメラが隠れないか調べるのにも使う
             float half = dep / 2 + 0.4f, rise = 1.6f;
             float slope = Mathf.Atan2(rise, half) * Mathf.Rad2Deg, len = Mathf.Sqrt(half * half + rise * rise);
             Util.Box("Roof N", h, new Vector3(0, ht + rise / 2, dep / 4 + 0.2f), new Vector3(wdt + 0.6f, 0.15f, len), Kit.Roof, Quaternion.Euler(slope, 0, 0));

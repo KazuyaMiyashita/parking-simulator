@@ -21,8 +21,12 @@ namespace ParkingSim
         CarController car;
         OwnCarParts parts;
         float lookYaw, lookPitch;
-        float padYaw, padPitch;   // 左スティックで動かした視線(押し込みで正面に戻す)
-        Vector3 topPos, chasePos;
+        public const float DefaultChasePitch = 29f;
+        public float chasePitch = DefaultChasePitch; // 外部視点の仰角(左スティック上下で変更、離してもそのまま)
+        const float ChaseDistance = 8.6f;
+        float chaseYaw, chaseYawOffset, occlusionPitch;
+        int occluderMask;
+        Vector3 topPos;
         float mirrorTilt;
         static readonly Color Sky = new Color(0.62f, 0.75f, 0.9f);
 
@@ -37,6 +41,7 @@ namespace ParkingSim
             cam.backgroundColor = Sky;
             cam.clearFlags = CameraClearFlags.SolidColor;
             go.AddComponent<AudioListener>();
+            occluderMask = Layers.Mask(Layers.Obstacle);
         }
 
         public void Attach(CarController c)
@@ -49,7 +54,6 @@ namespace ParkingSim
         {
             mode = m;
             lookYaw = lookPitch = 0;
-            padYaw = padPitch = 0;
             Snap();
         }
 
@@ -59,7 +63,8 @@ namespace ParkingSim
         {
             if (!car) return;
             topPos = fixedCenter ?? car.Center;
-            chasePos = ChaseTarget();
+            chaseYaw = car.yaw;
+            chaseYawOffset = occlusionPitch = 0f;
             UpdateCamera(0f);
         }
 
@@ -71,16 +76,9 @@ namespace ParkingSim
 
         void HandleInput()
         {
-            if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.Tab)) Cycle();
-            // 左スティック: 視線を動かす(倒した量に比例した速さ, 離してもそのまま)。押し込みで正面へ
+            if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.Tab) || Pad.Down(JoyButton.ZR)) Cycle();
             Vector2 ls = Pad.LeftStick;
             float dt = Time.deltaTime;
-            if (Pad.Down(JoyButton.LStick)) padYaw = padPitch = 0f;
-            else if (mode != ViewMode.Top2D)
-            {
-                padYaw = Mathf.Clamp(padYaw + ls.x * 120f * dt, -170f, 170f);
-                if (mode == ViewMode.Driver3D) padPitch = Mathf.Clamp(padPitch - ls.y * 60f * dt, -40f, 50f);
-            }
             float wheel = Input.mouseScrollDelta.y;
             if (mode == ViewMode.Top2D)
             {
@@ -95,12 +93,31 @@ namespace ParkingSim
             {
                 if (wheel != 0) driverFov = Mathf.Clamp(driverFov - wheel * 3f, 35f, 90f);
             }
+            else if (mode == ViewMode.Chase3D)
+            {
+                // 左スティック上下: 仰角(下で見下ろす角度が深くなる)。押し込みで初期値へ
+                chasePitch = Mathf.Clamp(chasePitch - ls.y * 40f * dt, 5f, 80f);
+                if (Pad.Down(JoyButton.LStick)) chasePitch = DefaultChasePitch;
+            }
         }
 
-        Vector3 ChaseTarget()
+        static Vector3 Orbit(Vector3 look, float yawDeg, float pitchDeg)
         {
-            Vector3 back = -CarSpec.Forward(car.yaw + padYaw); // シフトに関係なく車の後方から(左スティックで回り込める)
-            return car.Center + back * 7.5f + Vector3.up * 4.2f;
+            Vector3 back = -CarSpec.Forward(yawDeg);
+            float a = pitchDeg * Mathf.Deg2Rad;
+            return look + back * (ChaseDistance * Mathf.Cos(a)) + Vector3.up * (ChaseDistance * Mathf.Sin(a));
+        }
+
+        /// <summary>車とカメラの間に建物や他車などがあれば、見通せるまで仰角を上げた値を返す</summary>
+        float ClearPitch(Vector3 look, float yawDeg, float pitchDeg)
+        {
+            for (float p = pitchDeg; p < 85f; p += 3f)
+            {
+                Vector3 d = Orbit(look, yawDeg, p) - look;
+                if (!Physics.SphereCast(look, 0.25f, d.normalized, out _, d.magnitude, occluderMask, QueryTriggerInteraction.Ignore))
+                    return p;
+            }
+            return 85f;
         }
 
         public void UpdateCamera(float dt)
@@ -116,7 +133,8 @@ namespace ParkingSim
                     cam.orthographicSize = wide ? WideSize : orthoSize;
                     Vector3 target = fixedCenter ?? car.Center;
                     topPos = dt > 0 ? Vector3.Lerp(topPos, target, 1f - Mathf.Exp(-8f * dt)) : target;
-                    cam.transform.SetPositionAndRotation(new Vector3(topPos.x, 60f, topPos.z), Quaternion.Euler(90f, 0f, 0f));
+                    float up = fixedCenter.HasValue ? 0f : car.yaw; // 車の向きが常に画面の上
+                    cam.transform.SetPositionAndRotation(new Vector3(topPos.x, 60f, topPos.z), Quaternion.Euler(90f, up, 0f));
                     cam.nearClipPlane = 1f; cam.farClipPlane = 120f;
                     cam.cullingMask = ~0;
                     break;
@@ -135,7 +153,13 @@ namespace ParkingSim
                     if (lookL && lookR) targetYaw = -160f;      // 左肩越しに後方
                     else if (lookL) targetYaw = -75f;
                     else if (lookR) targetYaw = 75f;
-                    else { targetYaw = padYaw; targetPitch = padPitch; }
+                    else if (inputEnabled)
+                    {
+                        // 左スティック: 倒している間だけその方向を見る(離すと正面に戻る)
+                        Vector2 ls = Pad.LeftStick;
+                        targetYaw = ls.x * 160f;
+                        targetPitch = -ls.y * (ls.y > 0 ? 40f : 50f);
+                    }
                     if (free)
                     {
                         lookYaw = Mathf.Clamp(lookYaw + Input.GetAxis("Mouse X") * 3f, -170f, 170f);
@@ -162,10 +186,17 @@ namespace ParkingSim
                     cam.fieldOfView = 55f;
                     cam.nearClipPlane = 0.1f; cam.farClipPlane = 400f;
                     cam.cullingMask = ~0;
-                    Vector3 target = ChaseTarget();
-                    chasePos = dt > 0 ? Vector3.Lerp(chasePos, target, 1f - Mathf.Exp(-3f * dt)) : target;
-                    cam.transform.position = chasePos;
-                    cam.transform.rotation = Quaternion.LookRotation(car.Center + Vector3.up * 0.6f - chasePos);
+                    // 向き: 車の後方へゆっくり追従 + 左スティック左右(倒している間だけ、離すと後方に戻る)
+                    // 仰角: 左スティック上下の値をそのまま使う(慣性なし)。隠れるときだけ持ち上げる
+                    chaseYaw = dt > 0 ? Mathf.LerpAngle(chaseYaw, car.yaw, 1f - Mathf.Exp(-3f * dt)) : car.yaw;
+                    float off = inputEnabled ? Pad.LeftStick.x * 150f : 0f;
+                    chaseYawOffset = dt > 0 ? Mathf.Lerp(chaseYawOffset, off, 1f - Mathf.Exp(-10f * dt)) : off;
+                    float yawNow = chaseYaw + chaseYawOffset;
+                    Vector3 look = car.transform.position + Vector3.up * 0.6f;
+                    float need = ClearPitch(look, yawNow, chasePitch) - chasePitch;
+                    occlusionPitch = dt > 0 ? Mathf.MoveTowards(occlusionPitch, need, (need > occlusionPitch ? 240f : 60f) * dt) : need;
+                    Vector3 pos = Orbit(look, yawNow, chasePitch + occlusionPitch);
+                    cam.transform.SetPositionAndRotation(pos, Quaternion.LookRotation(look - pos));
                     break;
                 }
             }
