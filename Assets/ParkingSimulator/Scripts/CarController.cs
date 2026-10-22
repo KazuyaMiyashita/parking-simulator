@@ -40,6 +40,8 @@ namespace ParkingSim
         int lastMoveSign;
         float segmentLength;
         bool centering;
+        float padPedal;           // 右スティックで操作するペダル(+アクセル / -ブレーキ)
+        bool padNeutralizing;
         float spinDeg;
         int obstacleMask, stopMask, curbMask;
         static readonly Gear[] Order = { Gear.P, Gear.R, Gear.N, Gear.D };
@@ -101,24 +103,34 @@ namespace ParkingSim
             bool acc = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow);
             bool brk = Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow);
             bool hard = Input.GetKey(KeyCode.Space);
-            // Joy-Con / ゲームパッド: ZR アクセル, ZL ブレーキ, L 強ブレーキ
-            acc |= Pad.Held(JoyButton.ZR);
-            brk |= Pad.Held(JoyButton.ZL);
-            hard |= Pad.Held(JoyButton.L);
+            // Joy-Con / ゲームパッド: A アクセル, B ブレーキ(押している間だけ)
+            acc |= Pad.Held(JoyButton.A);
+            brk |= Pad.Held(JoyButton.B);
+
+            // 右スティック: 上下でペダル(離しても踏み込み量を保つ), 左右でハンドルを回す
+            float padPedalIn = PadAxis(Pad.RightStick.y), padSteer = PadAxis(Pad.RightStick.x);
+            if (Pad.Down(JoyButton.RStick)) padNeutralizing = true;
+            if (padPedalIn != 0f || padSteer != 0f || left || right || acc || brk) padNeutralizing = false;
+            padPedal = Mathf.Clamp(padPedal + padPedalIn * 0.8f * dt, -1f, 1f);
+            if (padNeutralizing)
+            {
+                // 右スティック押し込み: ペダルとハンドルを人が戻せる速さでゆっくり中立へ
+                padPedal = Mathf.MoveTowards(padPedal, 0f, 1.2f * dt);
+                wheelDeg = Mathf.MoveTowards(wheelDeg, 0f, 360f * dt);
+                if (padPedal == 0f && wheelDeg == 0f) padNeutralizing = false;
+            }
 
             // ペダル(キーを押している長さで踏み込み量が増える)
             throttle = acc ? Mathf.MoveTowards(Mathf.Max(throttle, 0.05f), 1f, 0.6f * dt) : Mathf.MoveTowards(throttle, 0f, 3f * dt);
             if (hard) brake = 1f;
             else if (brk) brake = Mathf.MoveTowards(Mathf.Max(brake, 0.08f), 1f, 1.2f * dt);
             else brake = Mathf.MoveTowards(brake, 0f, 4f * dt);
-            // アナログトリガー(ゲームパッド)は踏み込み量をそのまま使う
-            throttle = Mathf.Max(throttle, Pad.AccelAxis);
-            brake = Mathf.Max(brake, Pad.BrakeAxis);
+            throttle = Mathf.Max(throttle, Mathf.Max(0f, padPedal));
+            brake = Mathf.Max(brake, Mathf.Max(0f, -padPedal));
 
             // ステアリング
             float maxW = CarSpec.MaxWheelDeg;
-            if (Input.GetKeyDown(KeyCode.C) || Pad.Down(JoyButton.LStick) || Pad.Down(JoyButton.Down)) centering = true;
-            float padSteer = Pad.Steer;
+            if (Input.GetKeyDown(KeyCode.C)) centering = true;
             if (Input.GetKeyDown(KeyCode.M))
             {
                 mouseSteer = !mouseSteer;
@@ -149,16 +161,17 @@ namespace ParkingSim
             wheelDeg = Mathf.Clamp(wheelDeg, -maxW, maxW);
 
             // シフト
-            if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1) || Pad.Down(JoyButton.X)) TryShift(Gear.P);
-            if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2) || Pad.Down(JoyButton.B)) TryShift(Gear.R);
-            if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3) || Pad.Down(JoyButton.Y)) TryShift(Gear.N);
-            if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4) || Pad.Down(JoyButton.A)) TryShift(Gear.D);
+            if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1)) TryShift(Gear.P);
+            if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2)) TryShift(Gear.R);
+            if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)) TryShift(Gear.N);
+            if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4)) TryShift(Gear.D);
+            // Q / ZL: P 側へ1段, E / L: D 側へ1段(P → R → N → D)
             int idx = System.Array.IndexOf(Order, gear);
-            if (Input.GetKeyDown(KeyCode.Q) && idx > 0) TryShift(Order[idx - 1]);
-            if (Input.GetKeyDown(KeyCode.E) && idx < Order.Length - 1) TryShift(Order[idx + 1]);
+            if ((Input.GetKeyDown(KeyCode.Q) || Pad.Down(JoyButton.ZL)) && idx > 0) TryShift(Order[idx - 1]);
+            if ((Input.GetKeyDown(KeyCode.E) || Pad.Down(JoyButton.L)) && idx < Order.Length - 1) TryShift(Order[idx + 1]);
 
             // 電動パーキングブレーキ(アクセルで自動解除)
-            if (Input.GetKeyDown(KeyCode.B) || Pad.Down(JoyButton.R))
+            if (Input.GetKeyDown(KeyCode.B))
             {
                 parkingBrake = !parkingBrake;
                 notify?.Invoke(parkingBrake ? "パーキングブレーキ ON" : "パーキングブレーキ OFF", Color.white);
@@ -168,6 +181,14 @@ namespace ParkingSim
                 parkingBrake = false;
                 notify?.Invoke("パーキングブレーキ 自動解除", Color.white);
             }
+        }
+
+        /// <summary>スティックの軸ごとの遊び(上に倒したつもりでハンドルが少し回る、などを防ぐ)</summary>
+        static float PadAxis(float v)
+        {
+            const float dead = 0.25f;
+            float a = Mathf.Abs(v);
+            return a < dead ? 0f : Mathf.Sign(v) * (a - dead) / (1f - dead);
         }
 
         public void TryShift(Gear g)
@@ -339,7 +360,8 @@ namespace ParkingSim
             parkingBrake = true;
             wheelDeg = 0f;
             throttle = brake = 0f;
-            centering = false;
+            padPedal = 0f;
+            centering = padNeutralizing = false;
             ResetStats();
             UpdateVisuals();
         }

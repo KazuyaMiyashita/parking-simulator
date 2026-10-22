@@ -21,6 +21,7 @@ namespace ParkingSim
         CarController car;
         OwnCarParts parts;
         float lookYaw, lookPitch;
+        float padYaw, padPitch;   // 左スティックで動かした視線(押し込みで正面に戻す)
         Vector3 topPos, chasePos;
         float mirrorTilt;
         static readonly Color Sky = new Color(0.62f, 0.75f, 0.9f);
@@ -48,6 +49,7 @@ namespace ParkingSim
         {
             mode = m;
             lookYaw = lookPitch = 0;
+            padYaw = padPitch = 0;
             Snap();
         }
 
@@ -69,12 +71,22 @@ namespace ParkingSim
 
         void HandleInput()
         {
-            if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.Tab) || Pad.Down(JoyButton.Up)) Cycle();
+            if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.Tab)) Cycle();
+            // 左スティック: 視線を動かす(倒した量に比例した速さ, 離してもそのまま)。押し込みで正面へ
+            Vector2 ls = Pad.LeftStick;
+            float dt = Time.deltaTime;
+            if (Pad.Down(JoyButton.LStick)) padYaw = padPitch = 0f;
+            else if (mode != ViewMode.Top2D)
+            {
+                padYaw = Mathf.Clamp(padYaw + ls.x * 120f * dt, -170f, 170f);
+                if (mode == ViewMode.Driver3D) padPitch = Mathf.Clamp(padPitch - ls.y * 60f * dt, -40f, 50f);
+            }
             float wheel = Input.mouseScrollDelta.y;
             if (mode == ViewMode.Top2D)
             {
                 if (wheel != 0) orthoSize = Mathf.Clamp(orthoSize * (1f - wheel * 0.1f), 3f, 40f);
-                if (Pad.RightStick.y != 0) orthoSize = Mathf.Clamp(orthoSize * (1f - Pad.RightStick.y * 1.5f * Time.deltaTime), 3f, 40f);
+                if (ls.y != 0) orthoSize = Mathf.Clamp(orthoSize * (1f - ls.y * 1.5f * dt), 3f, 40f);
+                if (Pad.Down(JoyButton.LStick)) orthoSize = 9f;
                 if (Input.GetKeyDown(KeyCode.F)) wide = !wide;
                 if (Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.KeypadPlus)) orthoSize = Mathf.Max(3f, orthoSize - 10f * Time.deltaTime);
                 if (Input.GetKey(KeyCode.Minus) || Input.GetKey(KeyCode.KeypadMinus)) orthoSize = Mathf.Min(40f, orthoSize + 10f * Time.deltaTime);
@@ -87,7 +99,7 @@ namespace ParkingSim
 
         Vector3 ChaseTarget()
         {
-            Vector3 back = -CarSpec.Forward(car.yaw); // シフトに関係なく常に車の後方から
+            Vector3 back = -CarSpec.Forward(car.yaw + padYaw); // シフトに関係なく車の後方から(左スティックで回り込める)
             return car.Center + back * 7.5f + Vector3.up * 4.2f;
         }
 
@@ -117,19 +129,13 @@ namespace ParkingSim
                     cam.cullingMask = ~Layers.Mask(Layers.OwnCabin, Layers.Guide);
 
                     float targetYaw = 0f, targetPitch = 0f;
-                    bool lookL = inputEnabled && (Input.GetKey(KeyCode.Z) || Pad.Held(JoyButton.Left));
-                    bool lookR = inputEnabled && (Input.GetKey(KeyCode.X) || Pad.Held(JoyButton.Right));
-                    Vector2 rs = inputEnabled ? Pad.RightStick : Vector2.zero;
+                    bool lookL = inputEnabled && Input.GetKey(KeyCode.Z);
+                    bool lookR = inputEnabled && Input.GetKey(KeyCode.X);
                     bool free = inputEnabled && Input.GetMouseButton(1);
                     if (lookL && lookR) targetYaw = -160f;      // 左肩越しに後方
                     else if (lookL) targetYaw = -75f;
                     else if (lookR) targetYaw = 75f;
-                    else if (rs != Vector2.zero)
-                    {
-                        // 右スティックを倒した方向を見る(後ろに倒すと左肩越しに振り返る)
-                        targetYaw = rs.y < -0.5f && Mathf.Abs(rs.x) < 0.5f ? -160f : rs.x * 110f;
-                        targetPitch = rs.y > 0 ? -rs.y * 25f : 0f;
-                    }
+                    else { targetYaw = padYaw; targetPitch = padPitch; }
                     if (free)
                     {
                         lookYaw = Mathf.Clamp(lookYaw + Input.GetAxis("Mouse X") * 3f, -170f, 170f);
