@@ -51,6 +51,7 @@ namespace ParkingSim
     {
         public string name;
         public Rect rect; // x-z 平面
+        public bool hideOnMap; // マップに名前を出さない(細い道など)
 
         public bool Contains(Vector3 p) => rect.Contains(new Vector2(p.x, p.z));
     }

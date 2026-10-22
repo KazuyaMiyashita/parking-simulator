@@ -4,7 +4,7 @@ using UnityEngine.Rendering;
 
 namespace ParkingSim
 {
-    /// <summary>街・教習所を組み立てる部品</summary>
+    /// <summary>町を組み立てる部品</summary>
     public static class Kit
     {
         public const float RoadY = 0.01f;   // 舗装面の高さ(芝生の地面より少し上)
@@ -67,6 +67,35 @@ namespace ParkingSim
             }
             var normals = new List<Vector3>();
             foreach (var _ in verts) normals.Add(Vector3.up);
+            var mesh = new Mesh { name = name };
+            mesh.SetVertices(verts);
+            mesh.SetNormals(normals);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var mr = go.AddComponent<MeshRenderer>();
+            mr.sharedMaterial = m;
+            mr.shadowCastingMode = ShadowCastingMode.Off;
+            return go;
+        }
+
+        /// <summary>左右の縁の点列で作る帯状の面(カーブした道路など。見た目のみ)</summary>
+        public static GameObject Ribbon(Transform p, string name, IList<Vector3> left, IList<Vector3> right, float y, Material m)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(p, false);
+            var verts = new List<Vector3>();
+            var normals = new List<Vector3>();
+            var tris = new List<int>();
+            for (int i = 0; i < left.Count; i++)
+            {
+                verts.Add(new Vector3(left[i].x, y, left[i].z));
+                verts.Add(new Vector3(right[i].x, y, right[i].z));
+                normals.Add(Vector3.up); normals.Add(Vector3.up);
+                if (i == 0) continue;
+                int a = (i - 1) * 2, b = a + 1, c = a + 2, d = a + 3;
+                tris.AddRange(new[] { a, c, b, b, c, d, a, b, c, b, d, c }); // 両面
+            }
             var mesh = new Mesh { name = name };
             mesh.SetVertices(verts);
             mesh.SetNormals(normals);
@@ -147,14 +176,6 @@ namespace ParkingSim
             go.GetComponent<Renderer>().sharedMaterial = m;
             go.layer = Layers.Obstacle;
             return go;
-        }
-
-        /// <summary>教習所の紅白ポール</summary>
-        public static void CoursePole(Transform p, Vector3 pos)
-        {
-            var pole = Pole(p, pos, 0.05f, 1.2f, PoleWhite);
-            for (int i = 0; i < 3; i++)
-                Util.Cylinder("Stripe", pole.transform, new Vector3(0, -0.66f + i * 0.5f, 0), 0.52f, 0.17f, PoleRed);
         }
 
         // ---------------------------------------------------------------- 経路
@@ -339,6 +360,18 @@ namespace ParkingSim
                 ParkedCar(row, P(s + off, cd), yaw, kind, rng, out _);
             }
             return spots;
+        }
+
+        /// <summary>区画の奥に輪止めを2つ置く(SpotRow と同じ位置)</summary>
+        public static void WheelStops(Transform p, TargetSpot s)
+        {
+            foreach (float u in new[] { -0.55f, 0.55f })
+            {
+                Vector3 c = s.ToWorld(u, -s.length / 2 + StopFaceFromBack - 0.075f);
+                var st = Util.Box("Wheel Stop", p, new Vector3(c.x, 0.06f, c.z), new Vector3(0.6f, 0.12f, 0.15f), StopMat,
+                    Quaternion.LookRotation(-s.Forward), true);
+                st.layer = Layers.WheelStop;
+            }
         }
 
         /// <summary>区画にバックで停めた(後輪が輪止めに当たった)状態の自車の後軸位置</summary>

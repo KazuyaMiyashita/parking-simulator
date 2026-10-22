@@ -10,7 +10,7 @@ namespace ParkingSim
     public class MapView
     {
         /// <summary>マップに映す範囲(x-z 平面)。北(+z)が上</summary>
-        public static readonly Rect Area = Rect.MinMaxRect(-62f, -46f, 146f, 112f);
+        public static readonly Rect Area = Rect.MinMaxRect(-86f, -86f, 161f, 86f);
         const float PixelsPerMeter = 8f;
 
         public RenderTexture texture;

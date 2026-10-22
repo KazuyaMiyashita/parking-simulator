@@ -340,11 +340,21 @@ namespace ParkingSim
             yield return new WaitForSecondsRealtime(0.6f);
             ScreenCapture.CaptureScreenshot(Path("map_all.png"));
             yield return new WaitForSecondsRealtime(0.4f);
-            rig.fixedCenter = new Vector3(76f, 0, 58f);
-            rig.orthoSize = 52f;
+            foreach (var (name, center) in new[] { ("map_ne", new Vector3(80f, 0, 38f)), ("map_se", new Vector3(80f, 0, -38f)),
+                                                    ("map_nw", new Vector3(-38f, 0, 38f)), ("map_sw", new Vector3(-38f, 0, -38f)) })
+            {
+                rig.fixedCenter = center;
+                rig.orthoSize = 40f;
+                rig.Snap();
+                yield return new WaitForSecondsRealtime(0.6f);
+                ScreenCapture.CaptureScreenshot(Path(name + ".png"));
+                yield return new WaitForSecondsRealtime(0.4f);
+            }
+            rig.fixedCenter = new Vector3(37f, 0, 0);
+            rig.orthoSize = 95f;
             rig.Snap();
             yield return new WaitForSecondsRealtime(0.6f);
-            ScreenCapture.CaptureScreenshot(Path("map_school.png"));
+            ScreenCapture.CaptureScreenshot(Path("map_town.png"));
             yield return new WaitForSecondsRealtime(0.4f);
             rig.fixedCenter = null;
             rig.orthoSize = size;

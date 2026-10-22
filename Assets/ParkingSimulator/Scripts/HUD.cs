@@ -551,8 +551,8 @@ namespace ParkingSim
             var zoneStyle = new GUIStyle(small) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
             foreach (var z in gm.world.zones)
             {
-                if (z.name == "十字路の交差点") continue;
-                // 区画に重ならないよう区域のすぐ下に出す(教習所全体は上端の内側)
+                if (z.name == "十字路の交差点" || z.hideOnMap) continue;
+                // 区画に重ならないよう区域のすぐ下に出す(大きな区域は上端の内側)
                 bool big = z.rect.width * z.rect.height > 5000f;
                 Vector3 p = new Vector3(z.rect.center.x, 0, big ? z.rect.yMax - 4f : z.rect.yMin - 2.5f);
                 Vector2 sp = MapView.ToScreen(p, mr);
@@ -676,7 +676,7 @@ namespace ParkingSim
             GUILayout.Label("駐車シミュレーター 設定", title);
             GUILayout.Label($"自車: {CarSpec.DisplayName}  {CarSpec.ModelCode}  {CarSpec.ColorName}   " +
                             $"全長 {CarSpec.Length * 1000:#,0}mm  全幅 {CarSpec.Width * 1000:#,0}mm  最小回転半径 {CarSpec.MinTurningRadius}m", small);
-            GUILayout.Label("<color=#9ad>時間が止まった町で、自分だけが運転の練習をできます。自宅の月極駐車場・公道の十字路・コンビニ・自動車教習所(S字/クランク/方向転換/縦列駐車)を自由に走れます。</color>", new GUIStyle(small) { wordWrap = true });
+            GUILayout.Label("<color=#9ad>時間が止まった町で、自分だけが運転の練習をできます。外周道路に囲まれた住宅街に、自宅の車庫・月極駐車場・コンビニ・スーパー・縦列駐車帯、S字やクランクのある生活道路があります。</color>", new GUIStyle(small) { wordWrap = true });
             scroll = GUILayout.BeginScrollView(scroll);
 
             GUILayout.Label("スタート地点", header);
