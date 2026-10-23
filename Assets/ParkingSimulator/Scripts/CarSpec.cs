@@ -3,9 +3,10 @@ using UnityEngine;
 namespace ParkingSim
 {
     /// <summary>
-    /// SUBARU インプレッサ SPORT(3BA-GT2 / F54C, FF, CVT, 2021年12月以降の E 型)の諸元。単位は m。
-    /// 全長・全幅・全高・ホイールベース・トレッド・最小回転半径・タイヤはカタログ値。
-    /// オーバーハングの前後配分・ステアリングギア比・ミラー幅は公表値が見つからないための想定値。
+    /// SUBARU インプレッサ SPORT 1.6i-L EyeSight(3BA-GT2 / F54C, FF, CVT, 2021年12月以降の E 型)の諸元。単位は m。
+    /// 全長・全幅・全高・ホイールベース・トレッド・オーバーハング・最小回転半径・タイヤ・ホイールはカタログ値
+    /// (オーバーハングは SUBARU の FAQ https://faq.subaru.jp/faq/show/2207 のタイプ F)。
+    /// ステアリングギア比・ミラー幅は公表値が見つからないための想定値。
     /// </summary>
     public static class CarSpec
     {
@@ -14,7 +15,7 @@ namespace ParkingSim
         public const string ColorName = "クリスタルホワイト・パール";
         public const string Engine = "FB16 水平対向4気筒 1,599cc  115PS / 6,200rpm  148N·m / 3,600rpm";
         public const string Drivetrain = "FF / リニアトロニック(CVT)";
-        public const string Tire = "205/55R16(17インチ車は 205/50R17)";
+        public const string Tire = "205/55R16、ホイール 16×6.5J";
         public const int WeightKg = 1300;
         public static readonly Color BodyColor = new Color(0.93f, 0.93f, 0.915f);
 
@@ -24,10 +25,10 @@ namespace ParkingSim
         public const float Wheelbase = 2.670f;        // ホイールベース
         public const float TrackFront = 1.540f;       // トレッド 前
         public const float TrackRear = 1.545f;        // トレッド 後
-        public const float FrontOverhang = 1.005f;    // フロントオーバーハング(想定)
-        public const float RearOverhang = Length - Wheelbase - FrontOverhang; // 0.800
+        public const float FrontOverhang = 0.975f;    // フロントオーバーハング
+        public const float RearOverhang = 0.830f;     // リヤオーバーハング(全長 = 前 + ホイールベース + 後)
         public const float MinTurningRadius = 5.3f;   // 最小回転半径(外側前輪中心の軌跡)
-        public const float TireRadius = 0.316f;       // 205/55R16 想定
+        public const float TireRadius = 0.316f;       // 205/55R16(16×6.5J)
         public const float TireWidth = 0.205f;
         public const float SteeringRatio = 13.0f;     // ステアリングギア比(想定)
         public const float MirrorHalfWidth = 1.01f;   // ミラーを含む半幅(想定)
