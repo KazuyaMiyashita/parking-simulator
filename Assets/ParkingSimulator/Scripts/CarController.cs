@@ -19,14 +19,15 @@ namespace ParkingSim
         public float wheelDeg;     // ハンドル角(+右)
         public Gear gear = Gear.P;
         public float throttle, brake;
-        public bool steerHold;     // ハンドル固定(ZL / Space で切り替え)
+        public bool steerHold;     // ハンドル固定(左スティック押し込み / Space で切り替え)
 
         [Header("設定")]
         public bool creepEnabled; // オートマのクリープ現象
 
         [Header("操作")]
         public bool inputEnabled = true;
-        public float steerRate = 540f; // 入力の角度へハンドルを回す速さ(度/秒)
+        public float steerRate = 540f;  // 左右の目標角へハンドルを回す速さ(度/秒)
+        public float returnRate = 360f; // 中央へ戻る速さ(度/秒)
 
         [Header("記録")]
         public float travelled;    // 走った道のり(m)
@@ -36,7 +37,6 @@ namespace ParkingSim
         public System.Action<Gear> gearChanged;
         public System.Action contact;
 
-        bool regrab;              // ハンドル固定中にスティック(キー)を一度離した。次に倒すと固定を解いてつかみ直す
         int curbWheels;           // 縁石・歩道に乗っているタイヤの数
         readonly float[] wheelLift = new float[4]; // 段差で持ち上がったタイヤの高さ(見た目)
         float spinDeg;
@@ -105,29 +105,23 @@ namespace ParkingSim
         }
 
         /// <summary>
-        /// スティックの角度(キーは押している間いっぱい)がハンドルの目標角。離すと中央へ徐々に戻る。
-        /// 固定中は離しても角度を保ち、一度離してから倒し直すと固定を解いてつかみ直す
+        /// スティックの角度(キーは押している間いっぱい)がハンドルの目標角で、ハンドルはそこへ向けて回る。
+        /// 左右へは手で回すようにやや速く、中央(離したとき)へは自然に戻るようにややゆっくり。
+        /// 固定中はスティックに関わらず角度を保つ
         /// </summary>
         void ReadSteering(float dt)
         {
-            float maxW = CarSpec.MaxWheelDeg;
-            float input = Controls.Steer;
-            bool active = input != 0f;
             if (Controls.SteerHoldToggle)
             {
                 steerHold = !steerHold;
-                regrab = !active;
                 notify?.Invoke(steerHold ? "ハンドル固定" : "ハンドル固定を解除", Color.white);
             }
-            if (steerHold)
-            {
-                if (!active) regrab = true;
-                else if (regrab) steerHold = false;
-                else return;
-            }
-            if (active) wheelDeg = Mathf.MoveTowards(wheelDeg, input * maxW, steerRate * dt);
-            else wheelDeg = Mathf.MoveTowards(wheelDeg, 0f, Mathf.Lerp(360f, 900f, Mathf.Abs(speed) / 3f) * dt);
-            wheelDeg = Mathf.Clamp(wheelDeg, -maxW, maxW);
+            if (steerHold) return;
+
+            float maxW = CarSpec.MaxWheelDeg;
+            float target = Controls.Steer * maxW;
+            float rate = target != 0f ? steerRate : returnRate;
+            wheelDeg = Mathf.Clamp(Mathf.MoveTowards(wheelDeg, target, rate * dt), -maxW, maxW);
         }
 
         /// <summary>

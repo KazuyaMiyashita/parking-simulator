@@ -33,6 +33,7 @@
     "com.unity.modules.vr": "1.0.0",
     "com.unity.modules.wind": "1.0.0",
     "com.unity.modules.xr": "1.0.0",
-    "com.unity.inputsystem": "1.11.2"
+    "com.unity.inputsystem": "1.11.2",
+    "com.unity.cinemachine": "2.10.4"
   }
 }

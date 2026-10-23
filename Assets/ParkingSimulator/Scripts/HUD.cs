@@ -135,7 +135,7 @@ namespace ParkingSim
             var car = gm.car;
             GUILayout.BeginArea(new Rect(16, 16, 640, 100), panel);
             GUILayout.Label($"現在地: <b>{gm.world.ZoneName(car.Center)}</b>", label);
-            GUILayout.Label("<color=#9ad>視点 ZR / V    マップ − / M    メニュー + / Esc</color>", small);
+            GUILayout.Label("<color=#9ad>視点 X / V    ズーム ZR・ZL / R・F    マップ − / M    メニュー + / Esc</color>", small);
             GUILayout.Label(Pad.Status() + (Pad.Connected ? "" : "   <color=#888>(キーボードで操作できます)</color>"), small);
             GUILayout.EndArea();
         }
@@ -189,7 +189,8 @@ namespace ParkingSim
             GUILayout.Label(full ? "<color=#fc6>いっぱい</color>" : $"{Mathf.Abs(car.wheelDeg):0}°", small);
             GUILayout.Label($"タイヤ {car.SteerDeg:+0.0;-0.0;0.0}°", small);
             GUILayout.Space(6);
-            GUILayout.Label(car.steerHold ? "<color=#fb6><b>■ 固定中</b></color>  <size=14>ZL / Space</size>" : "<color=#888>固定 ZL / Space</color>", small);
+            GUILayout.Label(car.steerHold ? "<color=#fb6><b>■ 固定中</b></color>" : "<color=#888>固定</color>", small);
+            GUILayout.Label("<color=#888><size=14>Lスティック押込 / Space</size></color>", small);
             GUILayout.EndArea();
         }
 
@@ -627,8 +628,8 @@ namespace ParkingSim
             }
             GUILayout.Space(10);
             var note = new GUIStyle(small) { wordWrap = true };
-            GUILayout.Label("<color=#9ad>ハンドル: スティックを倒した角度までハンドルが回り、離すと中央へ戻ります(キーは押している間いっぱいまで回ります)。" +
-                            "ZL / Space で今の角度に固定でき、手を離して駐車に専念できます。固定中にもう一度押すか、スティックを倒し直すと解除されます。</color>", note);
+            GUILayout.Label("<color=#9ad>ハンドル: スティックを倒した角度までハンドルが回り、離すと中央へ少しゆっくり戻ります(キーは押している間いっぱいまで回ります)。" +
+                            "左スティック押し込み / Space で今の角度に固定でき、固定中はスティックを動かしてもハンドルは回りません。もう一度押すと解除されます。</color>", note);
             GUILayout.Label("<color=#9ad>走行中の危険なシフト操作(動いている間の P、前進中の R、後退中の D)は受け付けません。駐車枠に収まった状態で P に入れると、駐車回数と総走行距離を記録します。マップは止まっているときに開けます。</color>", note);
             GUILayout.FlexibleSpace();
             GUILayout.Label("<color=#9ad>戻る: B / Backspace</color>", small);

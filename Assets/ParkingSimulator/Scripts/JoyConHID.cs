@@ -56,7 +56,8 @@ namespace ParkingSim
         public long lastCommandResult;
         byte lastReportId;
 
-        Vector2 center, range = new Vector2(1300, 1300);
+        // 倒しきったときの中立からの距離(正の向き / 負の向き)。実際に届いた最大値に合わせて広げる
+        Vector2 center, rangePos = new Vector2(1000, 1000), rangeNeg = new Vector2(1000, 1000);
         int centerSamples;
         double lastReport = -10, lastFull = -10, lastCommand = -10;
         bool lightsSent;
@@ -200,12 +201,13 @@ namespace ParkingSim
         {
             var raw = new Vector2(x, y);
             if (raw == Vector2.zero) return; // スティックのデータが無いレポート
-            // 接続直後の数回で中立位置を記録(触らずに接続している前提)、範囲は実際の最大値に合わせて広げる
+            // 接続直後の数回で中立位置を記録(触らずに接続している前提)。
+            // 範囲は左右・上下で別々に、実際の最大値に合わせて広げる(中立が片寄っていても倒しきれば ±1 になる)
             if (centerSamples < 5) { center = centerSamples == 0 ? raw : Vector2.Lerp(center, raw, 0.5f); centerSamples++; }
             Vector2 d = raw - center;
-            range.x = Mathf.Max(range.x, Mathf.Abs(d.x));
-            range.y = Mathf.Max(range.y, Mathf.Abs(d.y));
-            Vector2 v = new Vector2(d.x / range.x, d.y / range.y);
+            if (d.x > 0) rangePos.x = Mathf.Max(rangePos.x, d.x); else rangeNeg.x = Mathf.Max(rangeNeg.x, -d.x);
+            if (d.y > 0) rangePos.y = Mathf.Max(rangePos.y, d.y); else rangeNeg.y = Mathf.Max(rangeNeg.y, -d.y);
+            Vector2 v = new Vector2(d.x / (d.x > 0 ? rangePos.x : rangeNeg.x), d.y / (d.y > 0 ? rangePos.y : rangeNeg.y));
             const float dead = 0.15f;
             float m = v.magnitude;
             stick = m < dead ? Vector2.zero : v / m * Mathf.Clamp01((m - dead) / (1 - dead));

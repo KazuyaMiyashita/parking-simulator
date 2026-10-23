@@ -9,10 +9,11 @@ namespace ParkingSim
     /// |--------------------------|---------------------|-------------------|
     /// | アクセル / ブレーキ      | A / B               | W / S             |
     /// | ハンドル                 | 左スティック左右    | A / D             |
-    /// | ハンドル固定(切替)     | ZL                  | Space             |
+    /// | ハンドル固定(切替)     | 左スティック押し込み | Space             |
     /// | シフト P→R→N→D / 逆     | R / L               | E / Q             |
     /// | 見渡す                   | 右スティック        | 矢印キー          |
-    /// | 視点切替                 | ZR                  | V                 |
+    /// | 視点切替                 | X                   | V                 |
+    /// | ズームイン / アウト      | ZR / ZL(同時で元に) | R / F(同時で元に) |
     /// | マップ / メニュー        | − / +               | M / Esc           |
     /// | (画面内)選ぶ・決定・戻る | 左スティック・十字 / A / B | 矢印・WASD / Enter / Backspace |
     /// </summary>
@@ -33,7 +34,7 @@ namespace ParkingSim
             }
         }
 
-        public static bool SteerHoldToggle => Pad.Down(JoyButton.ZL) || Input.GetKeyDown(KeyCode.Space);
+        public static bool SteerHoldToggle => Pad.Down(JoyButton.LStick) || Input.GetKeyDown(KeyCode.Space);
 
         /// <summary>D 側へ1段(P → R → N → D)</summary>
         public static bool ShiftUpDown => Pad.Down(JoyButton.R) || Input.GetKeyDown(KeyCode.E);
@@ -56,7 +57,9 @@ namespace ParkingSim
             }
         }
 
-        public static bool ViewCycle => Pad.Down(JoyButton.ZR) || Input.GetKeyDown(KeyCode.V);
+        public static bool ViewCycle => Pad.Down(JoyButton.X) || Input.GetKeyDown(KeyCode.V);
+        public static bool ZoomInHeld => Pad.Held(JoyButton.ZR) || Input.GetKey(KeyCode.R);
+        public static bool ZoomOutHeld => Pad.Held(JoyButton.ZL) || Input.GetKey(KeyCode.F);
         public static bool MapToggle => Pad.Down(JoyButton.Minus) || Input.GetKeyDown(KeyCode.M);
         public static bool MenuToggle => Pad.Down(JoyButton.Plus) || Input.GetKeyDown(KeyCode.Escape);
 
@@ -95,12 +98,15 @@ namespace ParkingSim
             NavX = dir.x; NavY = dir.y;
         }
 
-        /// <summary>スティックの軸ごとの遊び(上に倒したつもりでハンドルが少し回る、などを防ぐ)</summary>
+        /// <summary>
+        /// スティックの軸ごとの遊び(上に倒したつもりでハンドルが少し回る、などを防ぐ)。
+        /// 外周の枠は丸いので、真横に倒しきったつもりでも少し斜めだと 1 に届かない。0.9 以上は倒しきりとして 1 にする
+        /// </summary>
         static float Axis(float v)
         {
-            const float dead = 0.2f;
+            const float dead = 0.2f, full = 0.9f;
             float a = Mathf.Abs(v);
-            return a < dead ? 0f : Mathf.Sign(v) * Mathf.Clamp01((a - dead) / (1f - dead));
+            return a < dead ? 0f : Mathf.Sign(v) * Mathf.Clamp01((a - dead) / (full - dead));
         }
 
         // ---------------------------------------------------------------- 表示用
@@ -109,10 +115,11 @@ namespace ParkingSim
         {
             { "アクセル / ブレーキ", "A / B", "W / S" },
             { "ハンドル", "左スティック 左右", "A / D" },
-            { "ハンドル固定(もう一度で解除)", "ZL", "Space" },
+            { "ハンドル固定(もう一度で解除)", "左スティック押し込み", "Space" },
             { "シフト P→R→N→D / D→N→R→P", "R / L", "E / Q" },
             { "見渡す", "右スティック", "矢印キー" },
-            { "視点切替", "ZR", "V" },
+            { "視点切替", "X", "V" },
+            { "ズームイン / アウト(同時押しで元に戻す)", "ZR / ZL", "R / F" },
             { "マップ", "−", "M" },
             { "メニュー", "+", "Esc" },
             { "(画面内)選ぶ / 決定 / 戻る", "左スティック・十字 / A / B", "矢印 / Enter / Backspace" },
